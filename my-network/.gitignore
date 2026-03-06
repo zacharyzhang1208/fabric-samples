@@ -1,0 +1,24 @@
+# Fabric 网络生成的文件和证书
+organizations/ordererOrganizations/
+organizations/peerOrganizations/
+channel-artifacts/*.block
+channel-artifacts/*.tx
+channel-artifacts/*.pb
+
+# 链码打包文件
+*.tgz
+*.tar.gz
+
+# Docker volumes 和日志
+*.log
+
+# 编辑器和IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
