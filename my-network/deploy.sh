@@ -121,23 +121,23 @@ main() {
     
     # 步骤 1: 创建组织和证书
     print_step "1/8 - 创建组织和生成证书"
-    if [ -f "${ROOTDIR}/createOrgs.sh" ]; then
-        chmod +x ${ROOTDIR}/createOrgs.sh
-        ${ROOTDIR}/createOrgs.sh || handle_error "创建组织"
+    if [ -f "${ROOTDIR}/scripts/createOrgs.sh" ]; then
+        chmod +x ${ROOTDIR}/scripts/createOrgs.sh
+        ${ROOTDIR}/scripts/createOrgs.sh || handle_error "创建组织"
         print_success "组织证书创建成功"
     else
-        print_error "createOrgs.sh 脚本不存在"
+        print_error "scripts/createOrgs.sh 脚本不存在"
         exit 1
     fi
     
     # 步骤 2: 生成通道配置文件
     print_step "2/8 - 生成通道配置文件"
-    if [ -f "${ROOTDIR}/generateChannelArtifacts.sh" ]; then
-        chmod +x ${ROOTDIR}/generateChannelArtifacts.sh
-        ${ROOTDIR}/generateChannelArtifacts.sh || handle_error "生成通道配置"
+    if [ -f "${ROOTDIR}/scripts/generateChannelArtifacts.sh" ]; then
+        chmod +x ${ROOTDIR}/scripts/generateChannelArtifacts.sh
+        ${ROOTDIR}/scripts/generateChannelArtifacts.sh || handle_error "生成通道配置"
         print_success "通道配置文件生成成功"
     else
-        print_error "generateChannelArtifacts.sh 脚本不存在"
+        print_error "scripts/generateChannelArtifacts.sh 脚本不存在"
         exit 1
     fi
     
@@ -158,39 +158,39 @@ main() {
     
     # 步骤 4: 节点加入通道
     print_step "4/8 - 节点加入通道"
-    if [ -f "${ROOTDIR}/joinChannel.sh" ]; then
-        chmod +x ${ROOTDIR}/joinChannel.sh
-        ${ROOTDIR}/joinChannel.sh || handle_error "节点加入通道"
+    if [ -f "${ROOTDIR}/scripts/joinChannel.sh" ]; then
+        chmod +x ${ROOTDIR}/scripts/joinChannel.sh
+        ${ROOTDIR}/scripts/joinChannel.sh || handle_error "节点加入通道"
         print_success "节点成功加入通道"
     else
-        print_error "joinChannel.sh 脚本不存在"
+        print_error "scripts/joinChannel.sh 脚本不存在"
         handle_error "脚本缺失"
     fi
     
     # 步骤 5: 设置锚节点
     print_step "5/8 - 设置锚节点"
-    if [ -f "${ROOTDIR}/setAnchorPeer.sh" ]; then
-        chmod +x ${ROOTDIR}/setAnchorPeer.sh
+    if [ -f "${ROOTDIR}/scripts/setAnchorPeer.sh" ]; then
+        chmod +x ${ROOTDIR}/scripts/setAnchorPeer.sh
         echo "为 Org1 设置锚节点..."
-        ${ROOTDIR}/setAnchorPeer.sh 1 mychannel || handle_error "设置 Org1 锚节点"
+        ${ROOTDIR}/scripts/setAnchorPeer.sh 1 mychannel || handle_error "设置 Org1 锚节点"
         print_success "Org1 锚节点设置成功"
         
         echo "为 Org2 设置锚节点..."
-        ${ROOTDIR}/setAnchorPeer.sh 2 mychannel || handle_error "设置 Org2 锚节点"
+        ${ROOTDIR}/scripts/setAnchorPeer.sh 2 mychannel || handle_error "设置 Org2 锚节点"
         print_success "Org2 锚节点设置成功"
     else
-        print_error "setAnchorPeer.sh 脚本不存在"
+        print_error "scripts/setAnchorPeer.sh 脚本不存在"
         handle_error "脚本缺失"
     fi
     
     # 步骤 6: 部署智能合约
     print_step "6/8 - 部署智能合约"
-    if [ -f "${ROOTDIR}/deployChaincode.sh" ]; then
-        chmod +x ${ROOTDIR}/deployChaincode.sh
-        ${ROOTDIR}/deployChaincode.sh || handle_error "部署智能合约"
+    if [ -f "${ROOTDIR}/scripts/deployChaincode.sh" ]; then
+        chmod +x ${ROOTDIR}/scripts/deployChaincode.sh
+        ${ROOTDIR}/scripts/deployChaincode.sh || handle_error "部署智能合约"
         print_success "智能合约部署成功"
     else
-        print_error "deployChaincode.sh 脚本不存在"
+        print_error "scripts/deployChaincode.sh 脚本不存在"
         handle_error "脚本缺失"
     fi
     
@@ -203,12 +203,12 @@ main() {
     
     # 步骤 7: 测试智能合约
     print_step "7/8 - 测试智能合约调用"
-    if [ -f "${ROOTDIR}/invokeChaincode.sh" ]; then
-        chmod +x ${ROOTDIR}/invokeChaincode.sh
-        ${ROOTDIR}/invokeChaincode.sh || handle_error "测试智能合约"
+    if [ -f "${ROOTDIR}/scripts/invokeChaincode.sh" ]; then
+        chmod +x ${ROOTDIR}/scripts/invokeChaincode.sh
+        ${ROOTDIR}/scripts/invokeChaincode.sh || handle_error "测试智能合约"
         print_success "智能合约测试成功"
     else
-        print_warning "invokeChaincode.sh 脚本不存在，跳过测试"
+        print_warning "scripts/invokeChaincode.sh 脚本不存在，跳过测试"
     fi
     
     # 步骤 8: 显示网络状态

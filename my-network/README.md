@@ -42,25 +42,26 @@
 
 ```bash
 # 1. 创建组织
-./createOrgs.sh
+./scripts/createOrgs.sh
 
 # 2. 生成通道配置
-./generateChannelArtifacts.sh
+./scripts/generateChannelArtifacts.sh
 
 # 3. 启动网络
 docker-compose up -d
 
 # 4. 加入通道
-./joinChannel.sh
+./scripts/joinChannel.sh
 
-# 5. 设置锚节点
-./setAnchorPeer.sh
+# 5. 设置锚节点（需要为每个组织执行）
+./scripts/setAnchorPeer.sh 1 mychannel  # Org1
+./scripts/setAnchorPeer.sh 2 mychannel  # Org2
 
 # 6. 部署智能合约
-./deployChaincode.sh
+./scripts/deployChaincode.sh
 
 # 7. 测试智能合约
-./invokeChaincode.sh
+./scripts/invokeChaincode.sh
 ```
 
 ## 🛠️ 常用命令
