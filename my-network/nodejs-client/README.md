@@ -102,7 +102,7 @@ flClient.js (--org A --node 1 --port 3001)
 }
 ```
 
-## � 背书节点与 Fabric Discovery 机制
+## 背书节点与 Fabric Discovery 机制
 
 ### 关键发现
 
