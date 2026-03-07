@@ -1,6 +1,6 @@
 const fs = require('fs');
+const { fork } = require('child_process');
 const path = require('path');
-const tf = require('@tensorflow/tfjs');
 
 function toFixedNum(value) {
   return Number(value.toFixed(6));
@@ -45,16 +45,6 @@ function loadModelSnapshot(filePath) {
   };
 }
 
-function createLinearModel(learningRate) {
-  const model = tf.sequential();
-  model.add(tf.layers.dense({ units: 1, inputShape: [1], useBias: true }));
-  model.compile({
-    optimizer: tf.train.sgd(learningRate),
-    loss: 'meanSquaredError',
-  });
-  return model;
-}
-
 function createClientDataset(clientId, sampleSize) {
   const shift = clientId * 0.1;
   const xs = [];
@@ -70,44 +60,9 @@ function createClientDataset(clientId, sampleSize) {
   }
 
   return {
-    xs: tf.tensor2d(xs),
-    ys: tf.tensor2d(ys),
+    xs,
+    ys,
     sampleCount: sampleSize,
-  };
-}
-
-function setModelWeights(model, weights) {
-  const kernel = tf.tensor2d([[weights.weight]]);
-  const bias = tf.tensor1d([weights.bias]);
-  model.setWeights([kernel, bias]);
-  kernel.dispose();
-  bias.dispose();
-}
-
-function getModelWeights(model) {
-  const [kernel, bias] = model.getWeights();
-  const weight = kernel.arraySync()[0][0];
-  const biasValue = bias.arraySync()[0];
-  return { weight, bias: biasValue };
-}
-
-async function trainLocalModel(globalWeights, dataset, options) {
-  const model = createLinearModel(options.learningRate);
-  setModelWeights(model, globalWeights);
-
-  await model.fit(dataset.xs, dataset.ys, {
-    epochs: options.localEpochs,
-    batchSize: options.batchSize,
-    shuffle: true,
-    verbose: 0,
-  });
-
-  const localWeights = getModelWeights(model);
-  model.dispose();
-
-  return {
-    ...localWeights,
-    sampleCount: dataset.sampleCount,
   };
 }
 
@@ -129,24 +84,91 @@ function aggregateFedAvg(localModels) {
   );
 }
 
-async function evaluateMse(globalWeights, datasets) {
-  const model = createLinearModel(0.01);
-  setModelWeights(model, globalWeights);
+function evaluateMse(globalWeights, datasets) {
+  let totalLoss = 0;
+  let totalCount = 0;
 
-  const mergedXs = tf.concat(datasets.map((dataset) => dataset.xs), 0);
-  const mergedYs = tf.concat(datasets.map((dataset) => dataset.ys), 0);
+  for (const dataset of datasets) {
+    for (let i = 0; i < dataset.sampleCount; i += 1) {
+      const x = dataset.xs[i][0];
+      const y = dataset.ys[i][0];
+      const prediction = globalWeights.weight * x + globalWeights.bias;
+      const err = prediction - y;
+      totalLoss += err * err;
+      totalCount += 1;
+    }
+  }
 
-  const prediction = model.predict(mergedXs);
-  const mseTensor = tf.losses.meanSquaredError(mergedYs, prediction).mean();
-  const mseValue = (await mseTensor.data())[0];
+  return totalCount > 0 ? totalLoss / totalCount : 0;
+}
 
-  mergedXs.dispose();
-  mergedYs.dispose();
-  prediction.dispose();
-  mseTensor.dispose();
-  model.dispose();
+function createWorkerHandle(clientId, samplesPerClient) {
+  const workerScript = path.join(__dirname, 'flClientWorker.js');
+  const child = fork(workerScript, [], {
+    stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+  });
 
-  return mseValue;
+  const pending = new Map();
+  let sequence = 0;
+
+  child.on('message', (message) => {
+    const requestId = message?.requestId;
+    if (!requestId || !pending.has(requestId)) {
+      return;
+    }
+
+    const handler = pending.get(requestId);
+    pending.delete(requestId);
+
+    if (message.ok) {
+      handler.resolve(message.payload);
+      return;
+    }
+
+    handler.reject(new Error(message.error || `Worker ${clientId} error`));
+  });
+
+  child.on('exit', (code) => {
+    const exitError = new Error(`Worker ${clientId} exited with code ${code}`);
+    for (const handler of pending.values()) {
+      handler.reject(exitError);
+    }
+    pending.clear();
+  });
+
+  function request(type, payload) {
+    const requestId = `${clientId}-${++sequence}`;
+    return new Promise((resolve, reject) => {
+      pending.set(requestId, { resolve, reject });
+      child.send({ requestId, type, payload });
+    });
+  }
+
+  return {
+    child,
+    init: () => request('init', { clientId, samples: samplesPerClient }),
+    train: (payload) => request('train', payload),
+    async shutdown() {
+      if (!child.connected || child.killed) {
+        return;
+      }
+
+      try {
+        await request('shutdown', {});
+      } catch (err) {
+        // Ignore shutdown errors because process may have exited already.
+      }
+
+      if (!child.killed) {
+        child.kill();
+      }
+    },
+  };
+}
+
+async function runRoundWithWorkers(workers, payload) {
+  const jobs = workers.map((worker) => worker.train(payload));
+  return Promise.all(jobs);
 }
 
 function validateOptions(options) {
@@ -166,6 +188,7 @@ async function runSimpleFederatedLearning(opts) {
     localEpochs: opts.localEpochs ?? 3,
     batchSize: opts.batchSize ?? 8,
     learningRate: opts.learningRate ?? 0.03,
+    processMode: 'multi-process',
     loadModelPath: opts.loadModelPath || null,
     saveModelPath: opts.saveModelPath || null,
   };
@@ -186,36 +209,39 @@ async function runSimpleFederatedLearning(opts) {
     };
   }
   const rounds = [];
+  const workers = Array.from({ length: options.clients }, (_, idx) =>
+    createWorkerHandle(idx, options.samples)
+  );
 
-  for (let round = 1; round <= options.rounds; round += 1) {
-    const localUpdates = [];
-    for (const dataset of datasets) {
-      // Train local model from the same global initialization.
+  try {
+    await Promise.all(workers.map((worker) => worker.init()));
+
+    for (let round = 1; round <= options.rounds; round += 1) {
       // eslint-disable-next-line no-await-in-loop
-      const update = await trainLocalModel(globalWeights, dataset, options);
-      localUpdates.push(update);
+      const localUpdates = await runRoundWithWorkers(workers, {
+        globalWeights,
+        localEpochs: options.localEpochs,
+        batchSize: options.batchSize,
+        learningRate: options.learningRate,
+      });
+
+      globalWeights = aggregateFedAvg(localUpdates);
+      const loss = evaluateMse(globalWeights, datasets);
+
+      rounds.push({
+        round,
+        globalModel: {
+          weight: toFixedNum(globalWeights.weight),
+          bias: toFixedNum(globalWeights.bias),
+        },
+        mse: toFixedNum(loss),
+        clientCount: options.clients,
+        totalSamples: options.clients * options.samples,
+        timestamp: new Date().toISOString(),
+      });
     }
-
-    globalWeights = aggregateFedAvg(localUpdates);
-    // eslint-disable-next-line no-await-in-loop
-    const loss = await evaluateMse(globalWeights, datasets);
-
-    rounds.push({
-      round,
-      globalModel: {
-        weight: toFixedNum(globalWeights.weight),
-        bias: toFixedNum(globalWeights.bias),
-      },
-      mse: toFixedNum(loss),
-      clientCount: options.clients,
-      totalSamples: options.clients * options.samples,
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  for (const dataset of datasets) {
-    dataset.xs.dispose();
-    dataset.ys.dispose();
+  } finally {
+    await Promise.all(workers.map((worker) => worker.shutdown()));
   }
 
   const result = {

@@ -113,6 +113,7 @@ yargs(hideBin(process.argv))
       });
 
       console.log('FL finished');
+      console.log('Mode: multi-process (coordinator + client workers)');
       if (result.loadedFrom) {
         console.log(`Loaded initial model: ${result.loadedFrom}`);
       }

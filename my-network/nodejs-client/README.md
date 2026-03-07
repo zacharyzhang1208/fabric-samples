@@ -46,7 +46,7 @@ node src/cli.js --help
 
 ## 🧠 简化联邦学习流程
 
-先实现一个最小可运行版本：多个客户端做本地线性回归训练，聚合端使用 FedAvg 聚合。这个阶段不依赖 Hyperledger，只做纯本地训练流程验证。
+先实现一个最小可运行版本：主进程作为 FL 协调器，多个子进程模拟客户端本地训练，聚合端使用 FedAvg 聚合。这个阶段不依赖 Hyperledger，只做纯本地训练流程验证。
 
 ### 运行 FL 模拟
 
@@ -71,6 +71,8 @@ node src/cli.js fl:run --batchSize 16
 Round 1: w=..., b=..., mse=...
 Round 2: w=..., b=..., mse=...
 ```
+
+运行时会显示：`Mode: multi-process (coordinator + client workers)`。
 
 ### 生成可视化图表
 
