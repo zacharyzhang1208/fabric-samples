@@ -3,7 +3,7 @@
 set -e
 
 # Directories
-ROOTDIR=$(cd "$(dirname "$0")" && pwd)
+ROOTDIR=$(cd "$(dirname "$0")/.." && pwd)
 BIN_DIR="${ROOTDIR}/../bin"
 export PATH="${BIN_DIR}:${PATH}"
 CRYPTO_CONFIG_DIR="${ROOTDIR}/crypto-config"

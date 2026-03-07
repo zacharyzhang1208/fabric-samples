@@ -5,7 +5,7 @@
 
 set -e
 
-ROOTDIR=$(cd "$(dirname "$0")" && pwd)
+ROOTDIR=$(cd "$(dirname "$0")/.." && pwd)
 export PATH=${ROOTDIR}/../bin:$PATH
 export FABRIC_CFG_PATH=${ROOTDIR}
 
