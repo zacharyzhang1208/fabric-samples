@@ -1,7 +1,10 @@
 volumes:
   orderer.example.com:
   peer0.org1.example.com:
+  peer1.org1.example.com:
   peer0.org2.example.com:
+  peer1.org2.example.com:
+  peer2.org2.example.com:
 
 networks:
   test:
@@ -84,6 +87,46 @@ services:
     networks:
       - test
 
+  peer1.org1.example.com:
+    container_name: peer1.org1.example.com
+    image: hyperledger/fabric-peer:latest
+    labels:
+      service: hyperledger-fabric
+    environment:
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_VM_ENDPOINT=unix:///var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=fabric_test
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_PROFILE_ENABLED=false
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      - CORE_PEER_ID=peer1.org1.example.com
+      - CORE_PEER_ADDRESS=peer1.org1.example.com:7151
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:7151
+      - CORE_PEER_CHAINCODEADDRESS=peer1.org1.example.com:7152
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7152
+      - CORE_CHAINCODE_ADDRESS=peer1.org1.example.com:7152
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.org1.example.com:7051
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer1.org1.example.com:7151
+      - CORE_PEER_LOCALMSPID=Org1MSP
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_OPERATIONS_LISTENADDRESS=peer1.org1.example.com:9455
+      - CORE_METRICS_PROVIDER=prometheus
+      - CORE_CHAINCODE_EXECUTETIMEOUT=300s
+    volumes:
+      - ./organizations/peerOrganizations/org1.example.com/peers/peer1.org1.example.com/msp:/etc/hyperledger/fabric/msp
+      - ./organizations/peerOrganizations/org1.example.com/peers/peer1.org1.example.com/tls:/etc/hyperledger/fabric/tls
+      - peer1.org1.example.com:/var/hyperledger/production
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /root
+    command: peer node start
+    ports:
+      - 7151:7151
+      - 9455:9455
+    networks:
+      - test
+
   peer0.org2.example.com:
     container_name: peer0.org2.example.com
     image: hyperledger/fabric-peer:latest
@@ -121,5 +164,85 @@ services:
     ports:
       - 9051:9051
       - 9445:9445
+    networks:
+      - test
+
+  peer1.org2.example.com:
+    container_name: peer1.org2.example.com
+    image: hyperledger/fabric-peer:latest
+    labels:
+      service: hyperledger-fabric
+    environment:
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_VM_ENDPOINT=unix:///var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=fabric_test
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_PROFILE_ENABLED=false
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      - CORE_PEER_ID=peer1.org2.example.com
+      - CORE_PEER_ADDRESS=peer1.org2.example.com:9151
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:9151
+      - CORE_PEER_CHAINCODEADDRESS=peer1.org2.example.com:9152
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:9152
+      - CORE_CHAINCODE_ADDRESS=peer1.org2.example.com:9152
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer1.org2.example.com:9151
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.org2.example.com:9051
+      - CORE_PEER_LOCALMSPID=Org2MSP
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_OPERATIONS_LISTENADDRESS=peer1.org2.example.com:9456
+      - CORE_METRICS_PROVIDER=prometheus
+      - CORE_CHAINCODE_EXECUTETIMEOUT=300s
+    volumes:
+      - ./organizations/peerOrganizations/org2.example.com/peers/peer1.org2.example.com/msp:/etc/hyperledger/fabric/msp
+      - ./organizations/peerOrganizations/org2.example.com/peers/peer1.org2.example.com/tls:/etc/hyperledger/fabric/tls
+      - peer1.org2.example.com:/var/hyperledger/production
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /root
+    command: peer node start
+    ports:
+      - 9151:9151
+      - 9456:9456
+    networks:
+      - test
+
+  peer2.org2.example.com:
+    container_name: peer2.org2.example.com
+    image: hyperledger/fabric-peer:latest
+    labels:
+      service: hyperledger-fabric
+    environment:
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_VM_ENDPOINT=unix:///var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=fabric_test
+      - CORE_PEER_TLS_ENABLED=true
+      - CORE_PEER_PROFILE_ENABLED=false
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      - CORE_PEER_ID=peer2.org2.example.com
+      - CORE_PEER_ADDRESS=peer2.org2.example.com:9251
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:9251
+      - CORE_PEER_CHAINCODEADDRESS=peer2.org2.example.com:9252
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:9252
+      - CORE_CHAINCODE_ADDRESS=peer2.org2.example.com:9252
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer2.org2.example.com:9251
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.org2.example.com:9051
+      - CORE_PEER_LOCALMSPID=Org2MSP
+      - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
+      - CORE_OPERATIONS_LISTENADDRESS=peer2.org2.example.com:9457
+      - CORE_METRICS_PROVIDER=prometheus
+      - CORE_CHAINCODE_EXECUTETIMEOUT=300s
+    volumes:
+      - ./organizations/peerOrganizations/org2.example.com/peers/peer2.org2.example.com/msp:/etc/hyperledger/fabric/msp
+      - ./organizations/peerOrganizations/org2.example.com/peers/peer2.org2.example.com/tls:/etc/hyperledger/fabric/tls
+      - peer2.org2.example.com:/var/hyperledger/production
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /root
+    command: peer node start
+    ports:
+      - 9251:9251
+      - 9457:9457
     networks:
       - test

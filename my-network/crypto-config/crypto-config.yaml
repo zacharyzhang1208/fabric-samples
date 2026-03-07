@@ -51,7 +51,7 @@ PeerOrgs:
     Domain: org2.example.com
     EnableNodeOUs: true
     Template:
-      Count: 2
+      Count: 3
       Start: 0
       Hostname: peer{{.Index}}
       SANS:
