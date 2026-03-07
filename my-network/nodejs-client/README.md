@@ -44,6 +44,55 @@ npm run get name
 node src/cli.js --help
 ```
 
+## 🧠 简化联邦学习流程
+
+先实现一个最小可运行版本：多个客户端做本地线性回归训练，聚合端使用 FedAvg 聚合。这个阶段不依赖 Hyperledger，只做纯本地训练流程验证。
+
+### 运行 FL 模拟
+
+```bash
+node src/cli.js fl:run
+# 或
+npm run fl
+```
+
+### 常用参数
+
+```bash
+node src/cli.js fl:run --rounds 8 --clients 5 --samples 30 --localEpochs 4 --lr 0.02
+
+# 可调 batch size
+node src/cli.js fl:run --batchSize 16
+```
+
+输出会展示每一轮的全局参数和 MSE，例如：
+
+```bash
+Round 1: w=..., b=..., mse=...
+Round 2: w=..., b=..., mse=...
+```
+
+### 生成可视化图表
+
+默认会生成 HTML 报告（含 MSE/Weight/Bias 曲线）：
+
+```bash
+node src/cli.js fl:run
+# 输出: Chart report generated: .../reports/fl-report.html
+```
+
+自定义图表输出路径：
+
+```bash
+node src/cli.js fl:run --chartFile ./reports/my-fl.html
+```
+
+禁用图表生成：
+
+```bash
+node src/cli.js fl:run --no-chart
+```
+
 ## 📁 项目结构
 
 ```

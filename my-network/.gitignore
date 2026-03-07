@@ -1,12 +1,8 @@
-# Python 虚拟环境
-fabric-venv/
-venv/
-env/
-.venv/
-
 # Node.js
 nodejs-client/node_modules/
 nodejs-client/.env
+nodejs-client/models/
+nodejs-client/reports/
 
 # Fabric 网络生成的文件和证书
 organizations/ordererOrganizations/

@@ -7,12 +7,14 @@
   "scripts": {
     "start": "node src/cli.js",
     "set": "node src/cli.js set",
-    "get": "node src/cli.js get"
+    "get": "node src/cli.js get",
+    "fl": "node src/cli.js fl:run"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
     "dotenv": "^16.4.5",
     "fabric-network": "^2.2.20",
     "yargs": "^17.7.2"
