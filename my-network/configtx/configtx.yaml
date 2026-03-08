@@ -82,6 +82,30 @@ Organizations:
             - Host: peer0.org2.example.com
               Port: 9051
 
+    # Third Party Organization
+    - &TP
+        Name: TPMSP
+        ID: TPMSP
+        MSPDir: ../organizations/peerOrganizations/tp.example.com/msp
+        
+        Policies:
+            Readers:
+                Type: Signature
+                Rule: "OR('TPMSP.admin', 'TPMSP.peer', 'TPMSP.client')"
+            Writers:
+                Type: Signature
+                Rule: "OR('TPMSP.admin', 'TPMSP.client')"
+            Admins:
+                Type: Signature
+                Rule: "OR('TPMSP.admin')"
+            Endorsement:
+                Type: Signature
+                Rule: "OR('TPMSP.peer')"
+        
+        AnchorPeers:
+            - Host: peer0.tp.example.com
+              Port: 11051
+
 ################################################################################
 #
 #   SECTION: Capabilities
@@ -270,7 +294,8 @@ Channel: &ChannelDefaults
 ################################################################################
 Profiles:
 
-    TwoOrgsApplicationGenesis:
+    # Training Channel: Only Org1 and Org2 for federated learning
+    TrainingChannel:
         <<: *ChannelDefaults
         Orderer:
             <<: *OrdererDefaults
@@ -282,5 +307,21 @@ Profiles:
             Organizations:
                 - *Org1
                 - *Org2
+            Capabilities: *ApplicationCapabilities
+
+    # Inference Channel: Org1, Org2, and TP for model serving
+    InferenceChannel:
+        <<: *ChannelDefaults
+        Orderer:
+            <<: *OrdererDefaults
+            Organizations:
+                - *OrdererOrg
+            Capabilities: *OrdererCapabilities
+        Application:
+            <<: *ApplicationDefaults
+            Organizations:
+                - *Org1
+                - *Org2
+                - *TP
             Capabilities: *ApplicationCapabilities
 

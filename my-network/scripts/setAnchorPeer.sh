@@ -24,6 +24,7 @@ case $ORG in
     export CORE_PEER_ADDRESS=peer0.org1.example.com:7051
     HOST="peer0.org1.example.com"
     PORT=7051
+    ORG_DOMAIN="org1"
     ;;
   2)
     export CORE_PEER_LOCALMSPID=Org2MSP
@@ -31,6 +32,15 @@ case $ORG in
     export CORE_PEER_ADDRESS=peer0.org2.example.com:9051
     HOST="peer0.org2.example.com"
     PORT=9051
+    ORG_DOMAIN="org2"
+    ;;
+  3)
+    export CORE_PEER_LOCALMSPID=TPMSP
+    export CORE_PEER_MSPCONFIGPATH=${ROOTDIR}/organizations/peerOrganizations/tp.example.com/users/Admin@tp.example.com/msp
+    export CORE_PEER_ADDRESS=peer0.tp.example.com:11051
+    HOST="peer0.tp.example.com"
+    PORT=11051
+    ORG_DOMAIN="tp"
     ;;
   *)
     echo "Invalid org: $ORG"
@@ -39,7 +49,11 @@ case $ORG in
 esac
 
 export CORE_PEER_TLS_ENABLED=true
-export CORE_PEER_TLS_ROOTCERT_FILE=${ROOTDIR}/organizations/peerOrganizations/org${ORG}.example.com/peers/peer0.org${ORG}.example.com/tls/ca.crt
+if [ "$ORG" = "3" ]; then
+  export CORE_PEER_TLS_ROOTCERT_FILE=${ROOTDIR}/organizations/peerOrganizations/tp.example.com/peers/peer0.tp.example.com/tls/ca.crt
+else
+  export CORE_PEER_TLS_ROOTCERT_FILE=${ROOTDIR}/organizations/peerOrganizations/org${ORG}.example.com/peers/peer0.org${ORG}.example.com/tls/ca.crt
+fi
 export ORDERER_CA=${ROOTDIR}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/tls/ca.crt
 
 # Determine peer container name
@@ -50,9 +64,12 @@ case $ORG in
   2)
     PEER_CONTAINER="peer0.org2.example.com"
     ;;
+  3)
+    PEER_CONTAINER="peer0.tp.example.com"
+    ;;
 esac
 
-echo "Setting anchor peer for Org$ORG on channel $CHANNEL..."
+echo "Setting anchor peer for ${CORE_PEER_LOCALMSPID} on channel $CHANNEL..."
 
 # Copy orderer CA
 cp "$ORDERER_CA" /tmp/orderer-ca.crt
@@ -67,14 +84,14 @@ jq '.data.data[0].payload.data.config' /tmp/config_block.json > /tmp/config.json
 
 # If the same anchor peer already exists, skip update
 if jq -e \
-  ".channel_group.groups.Application.groups.Org${ORG}MSP.values.AnchorPeers.value.anchor_peers[] | select(.host==\"${HOST}\" and .port==${PORT})" \
+  ".channel_group.groups.Application.groups.${CORE_PEER_LOCALMSPID}.values.AnchorPeers.value.anchor_peers[] | select(.host==\"${HOST}\" and .port==${PORT})" \
   /tmp/config.json > /dev/null 2>&1; then
-  echo "Anchor peer already set for Org${ORG} on channel ${CHANNEL}. Skipping."
+  echo "Anchor peer already set for ${CORE_PEER_LOCALMSPID} on channel ${CHANNEL}. Skipping."
   exit 0
 fi
 
 # Modify config: add anchor peer (host)
-jq ".channel_group.groups.Application.groups.Org${ORG}MSP.values += {\"AnchorPeers\": {\"mod_policy\": \"Admins\", \"value\": {\"anchor_peers\": [{\"host\": \"${HOST}\", \"port\": ${PORT}}]}, \"version\": \"0\"}}" \
+jq ".channel_group.groups.Application.groups.${CORE_PEER_LOCALMSPID}.values += {\"AnchorPeers\": {\"mod_policy\": \"Admins\", \"value\": {\"anchor_peers\": [{\"host\": \"${HOST}\", \"port\": ${PORT}}]}, \"version\": \"0\"}}" \
   /tmp/config.json > /tmp/modified_config.json
 
 # Compute config update (host)

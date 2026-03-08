@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# 链码调用测试脚本
-# 用法: ./invokeChaincode.sh
+# 双通道链码调用测试脚本
+# 测试 Training Channel 和 Inference Channel
 
 set -e
 
@@ -9,7 +9,8 @@ ROOTDIR=$(cd "$(dirname "$0")/.." && pwd)
 export PATH=${ROOTDIR}/../bin:$PATH
 export FABRIC_CFG_PATH=${ROOTDIR}
 
-CHANNEL_NAME="mychannel"
+TRAINING_CHANNEL="trainingchannel"
+INFERENCE_CHANNEL="inferencechannel"
 CC_NAME="simple"
 ORDERER_CA=${ROOTDIR}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
 
@@ -31,85 +32,106 @@ setOrg2Env() {
     export CORE_PEER_ADDRESS=localhost:9051
 }
 
+# 设置 TP 环境变量
+setTPEnv() {
+    export CORE_PEER_TLS_ENABLED=true
+    export CORE_PEER_LOCALMSPID="TPMSP"
+    export CORE_PEER_TLS_ROOTCERT_FILE=${ROOTDIR}/organizations/peerOrganizations/tp.example.com/peers/peer0.tp.example.com/tls/ca.crt
+    export CORE_PEER_MSPCONFIGPATH=${ROOTDIR}/organizations/peerOrganizations/tp.example.com/users/Admin@tp.example.com/msp
+    export CORE_PEER_ADDRESS=localhost:11051
+}
+
 echo "=========================================="
-echo "测试链码调用 - Set 操作"
+echo "测试 Training Channel (Org1 + Org2)"
 echo "=========================================="
 
 setOrg1Env
 
 echo ""
-echo "1. 设置 name = Alice"
+echo "1. Org1 提交训练更新到 Training Channel"
 peer chaincode invoke \
     -o localhost:7050 \
     --ordererTLSHostnameOverride orderer.example.com \
     --tls --cafile ${ORDERER_CA} \
-    -C ${CHANNEL_NAME} \
+    -C ${TRAINING_CHANNEL} \
     -n ${CC_NAME} \
     --peerAddresses localhost:7051 \
     --tlsRootCertFiles ${ROOTDIR}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt \
     --peerAddresses localhost:9051 \
     --tlsRootCertFiles ${ROOTDIR}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt \
-    -c '{"function":"Set","Args":["name","Alice"]}'
-
-sleep 3
-
-echo ""
-echo "2. 查询 name"
-peer chaincode query \
-    -C ${CHANNEL_NAME} \
-    -n ${CC_NAME} \
-    --peerAddresses localhost:7051 \
-    --tlsRootCertFiles ${ROOTDIR}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt \
-    -c '{"function":"Get","Args":["name"]}'
-
-echo ""
-echo ""
-echo "=========================================="
-echo "3. 设置 age = 25"
-peer chaincode invoke \
-    -o localhost:7050 \
-    --ordererTLSHostnameOverride orderer.example.com \
-    --tls --cafile ${ORDERER_CA} \
-    -C ${CHANNEL_NAME} \
-    -n ${CC_NAME} \
-    --peerAddresses localhost:7051 \
-    --tlsRootCertFiles ${ROOTDIR}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt \
-    --peerAddresses localhost:9051 \
-    --tlsRootCertFiles ${ROOTDIR}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt \
-    -c '{"function":"Set","Args":["age","25"]}'
+    -c '{"function":"Set","Args":["training:org1:update1","model_weights_v1"]}'
 
 sleep 2
 
 echo ""
-echo "4. 查询 age"
-peer chaincode query \
-    -C ${CHANNEL_NAME} \
-    -n ${CC_NAME} \
-    -c '{"function":"Get","Args":["age"]}'
-
-echo ""
-echo ""
-echo "=========================================="
-echo "切换到 Org2 进行查询测试"
-echo "=========================================="
-
+echo "2. Org2 查询 Org1 的训练更新（同通道可见）"
 setOrg2Env
+peer chaincode query \
+    -C ${TRAINING_CHANNEL} \
+    -n ${CC_NAME} \
+    -c '{"function":"Get","Args":["training:org1:update1"]}'
 
 echo ""
-echo "5. 从 Org2 查询 name"
-peer chaincode query \
-    -C ${CHANNEL_NAME} \
+echo "3. Org2 提交训练更新到 Training Channel"
+peer chaincode invoke \
+    -o localhost:7050 \
+    --ordererTLSHostnameOverride orderer.example.com \
+    --tls --cafile ${ORDERER_CA} \
+    -C ${TRAINING_CHANNEL} \
     -n ${CC_NAME} \
-    -c '{"function":"Get","Args":["name"]}'
+    --peerAddresses localhost:7051 \
+    --tlsRootCertFiles ${ROOTDIR}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt \
+    --peerAddresses localhost:9051 \
+    --tlsRootCertFiles ${ROOTDIR}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt \
+    -c '{"function":"Set","Args":["training:org2:update1","model_weights_v2"]}'
 
-echo ""
-echo "6. 从 Org2 查询 age"
-peer chaincode query \
-    -C ${CHANNEL_NAME} \
-    -n ${CC_NAME} \
-    -c '{"function":"Get","Args":["age"]}'
+sleep 2
 
 echo ""
 echo "=========================================="
-echo "✓ 链码测试完成"
+echo "测试 Inference Channel (Org1 + Org2 + TP)"
 echo "=========================================="
+
+setOrg1Env
+
+echo ""
+echo "4. Org1 发布全局模型到 Inference Channel"
+peer chaincode invoke \
+    -o localhost:7050 \
+    --ordererTLSHostnameOverride orderer.example.com \
+    --tls --cafile ${ORDERER_CA} \
+    -C ${INFERENCE_CHANNEL} \
+    -n ${CC_NAME} \
+    --peerAddresses localhost:7051 \
+    --tlsRootCertFiles ${ROOTDIR}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt \
+    --peerAddresses localhost:9051 \
+    --tlsRootCertFiles ${ROOTDIR}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt \
+    --peerAddresses localhost:11051 \
+    --tlsRootCertFiles ${ROOTDIR}/organizations/peerOrganizations/tp.example.com/peers/peer0.tp.example.com/tls/ca.crt \
+    -c '{"function":"Set","Args":["global_model:v1","aggregated_model_weights"]}'
+
+sleep 2
+
+echo ""
+echo "5. TP 查询全局模型（Inference Channel 可见）"
+setTPEnv
+peer chaincode query \
+    -C ${INFERENCE_CHANNEL} \
+    -n ${CC_NAME} \
+    -c '{"function":"Get","Args":["global_model:v1"]}'
+
+echo ""
+echo "6. Org2 从 Inference Channel 查询全局模型"
+setOrg2Env
+peer chaincode query \
+    -C ${INFERENCE_CHANNEL} \
+    -n ${CC_NAME} \
+    -c '{"function":"Get","Args":["global_model:v1"]}'
+
+echo ""
+echo "=========================================="
+echo "✓ 双通道测试完成"
+echo "=========================================="
+echo "Training Channel: Org1 和 Org2 可交换训练更新"
+echo "Inference Channel: 所有组织（含TP）可访问全局模型"
+echo "通道隔离: TP 无法访问 Training Channel"

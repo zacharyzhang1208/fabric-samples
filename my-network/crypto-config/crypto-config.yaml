@@ -61,22 +61,20 @@ PeerOrgs:
       Count: 1
 
   # ---------------------------------------------------------------------------
-  # Org3
+  # TP (Third Party)
   # ---------------------------------------------------------------------------
-  # Uncomment below to add a third organization (optional)
-  # ---------------------------------------------------------------------------
-  # - Name: Org3
-  #   Domain: org3.example.com
-  #   EnableNodeOUs: true
-  #   Template:
-  #     Count: 1
-  #     Start: 0
-  #     Hostname: peer
-  #     SANS:
-  #       - localhost
-  #       - "*.org3.example.com"
-  #   Users:
-  #     Count: 1
+  - Name: TP
+    Domain: tp.example.com
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+      Start: 0
+      Hostname: peer{{.Index}}
+      SANS:
+        - localhost
+        - "*.tp.example.com"
+    Users:
+      Count: 1
 
 # ---------------------------------------------------------------------------
 # "OrdererOrgs" - Definition of organizations managing orderer nodes

@@ -57,7 +57,11 @@ cleanup() {
     # 删除相关容器
     echo "删除 Fabric 相关容器..."
     docker rm -f $(docker ps -aq -f name=peer0.org1.example.com) 2>/dev/null || true
+    docker rm -f $(docker ps -aq -f name=peer1.org1.example.com) 2>/dev/null || true
     docker rm -f $(docker ps -aq -f name=peer0.org2.example.com) 2>/dev/null || true
+    docker rm -f $(docker ps -aq -f name=peer1.org2.example.com) 2>/dev/null || true
+    docker rm -f $(docker ps -aq -f name=peer2.org2.example.com) 2>/dev/null || true
+    docker rm -f $(docker ps -aq -f name=peer0.tp.example.com) 2>/dev/null || true
     docker rm -f $(docker ps -aq -f name=orderer.example.com) 2>/dev/null || true
     docker rm -f $(docker ps -aq -f name=dev-) 2>/dev/null || true
     
@@ -69,7 +73,11 @@ cleanup() {
     echo "删除 Docker volumes..."
     docker volume rm $(docker volume ls -q -f name=orderer.example.com) 2>/dev/null || true
     docker volume rm $(docker volume ls -q -f name=peer0.org1.example.com) 2>/dev/null || true
+    docker volume rm $(docker volume ls -q -f name=peer1.org1.example.com) 2>/dev/null || true
     docker volume rm $(docker volume ls -q -f name=peer0.org2.example.com) 2>/dev/null || true
+    docker volume rm $(docker volume ls -q -f name=peer1.org2.example.com) 2>/dev/null || true
+    docker volume rm $(docker volume ls -q -f name=peer2.org2.example.com) 2>/dev/null || true
+    docker volume rm $(docker volume ls -q -f name=peer0.tp.example.com) 2>/dev/null || true
     
     # 清理生成的文件
     echo "清理生成的证书和配置文件..."
@@ -161,23 +169,26 @@ main() {
     if [ -f "${ROOTDIR}/scripts/joinChannel.sh" ]; then
         chmod +x ${ROOTDIR}/scripts/joinChannel.sh
         ${ROOTDIR}/scripts/joinChannel.sh || handle_error "节点加入通道"
-        print_success "节点成功加入通道"
+        print_success "节点成功加入两个通道"
     else
         print_error "scripts/joinChannel.sh 脚本不存在"
         handle_error "脚本缺失"
     fi
     
-    # 步骤 5: 设置锚节点
+    # 步骤 5: 设置锚节点 (为两个 channel 分别设置)
     print_step "5/8 - 设置锚节点"
     if [ -f "${ROOTDIR}/scripts/setAnchorPeer.sh" ]; then
         chmod +x ${ROOTDIR}/scripts/setAnchorPeer.sh
-        echo "为 Org1 设置锚节点..."
-        ${ROOTDIR}/scripts/setAnchorPeer.sh 1 mychannel || handle_error "设置 Org1 锚节点"
-        print_success "Org1 锚节点设置成功"
+        echo "为 Training Channel 设置锚节点..."
+        ${ROOTDIR}/scripts/setAnchorPeer.sh 1 trainingchannel || handle_error "设置 Org1@Training 锚节点"
+        ${ROOTDIR}/scripts/setAnchorPeer.sh 2 trainingchannel || handle_error "设置 Org2@Training 锚节点"
+        print_success "Training Channel 锚节点设置成功"
         
-        echo "为 Org2 设置锚节点..."
-        ${ROOTDIR}/scripts/setAnchorPeer.sh 2 mychannel || handle_error "设置 Org2 锚节点"
-        print_success "Org2 锚节点设置成功"
+        echo "为 Inference Channel 设置锚节点..."
+        ${ROOTDIR}/scripts/setAnchorPeer.sh 1 inferencechannel || handle_error "设置 Org1@Inference 锚节点"
+        ${ROOTDIR}/scripts/setAnchorPeer.sh 2 inferencechannel || handle_error "设置 Org2@Inference 锚节点"
+        ${ROOTDIR}/scripts/setAnchorPeer.sh 3 inferencechannel || handle_error "设置 TP@Inference 锚节点"
+        print_success "Inference Channel 锚节点设置成功"
     else
         print_error "scripts/setAnchorPeer.sh 脚本不存在"
         handle_error "脚本缺失"
@@ -188,7 +199,7 @@ main() {
     if [ -f "${ROOTDIR}/scripts/deployChaincode.sh" ]; then
         chmod +x ${ROOTDIR}/scripts/deployChaincode.sh
         ${ROOTDIR}/scripts/deployChaincode.sh || handle_error "部署智能合约"
-        print_success "智能合约部署成功"
+        print_success "智能合约在两个通道部署成功"
     else
         print_error "scripts/deployChaincode.sh 脚本不存在"
         handle_error "脚本缺失"
@@ -217,6 +228,10 @@ main() {
     echo -e "${GREEN}┌─────────────────────────────────────────────┐${NC}"
     echo -e "${GREEN}│        🎉 网络部署成功！                    │${NC}"
     echo -e "${GREEN}└─────────────────────────────────────────────┘${NC}"
+    echo ""
+    echo "通道配置:"
+    echo "  - Training Channel: Org1 (2 peers) + Org2 (3 peers)"
+    echo "  - Inference Channel: Org1 (2 peers) + Org2 (3 peers) + TP (1 peer)"
     echo ""
     echo "网络信息："
     echo "  • 组织数量: 2 (Org1, Org2)"
