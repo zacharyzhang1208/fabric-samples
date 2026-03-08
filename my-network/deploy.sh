@@ -10,6 +10,8 @@ ROOTDIR=$(cd "$(dirname "$0")" && pwd)
 export PATH=${ROOTDIR}/../bin:$PATH
 export FABRIC_CFG_PATH=${ROOTDIR}
 
+CHAINCODE_STRATEGY="default"
+
 # 颜色输出
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -198,7 +200,7 @@ main() {
     print_step "6/8 - 部署智能合约"
     if [ -f "${ROOTDIR}/scripts/deployChaincode.sh" ]; then
         chmod +x ${ROOTDIR}/scripts/deployChaincode.sh
-        ${ROOTDIR}/scripts/deployChaincode.sh || handle_error "部署智能合约"
+        ${ROOTDIR}/scripts/deployChaincode.sh --strategy ${CHAINCODE_STRATEGY} || handle_error "部署智能合约"
         print_success "智能合约在两个通道部署成功"
     else
         print_error "scripts/deployChaincode.sh 脚本不存在"
@@ -234,15 +236,17 @@ main() {
     echo "  - Inference Channel: Org1 (2 peers) + Org2 (3 peers) + TP (1 peer)"
     echo ""
     echo "网络信息："
-    echo "  • 组织数量: 2 (Org1, Org2)"
+    echo "  • 组织数量: 3 (Org1, Org2, TP)"
     echo "  • 排序节点: orderer.example.com:7050"
     echo "  • Org1 节点: peer0.org1.example.com:7051"
     echo "  • Org2 节点: peer0.org2.example.com:9051"
-    echo "  • 通道名称: mychannel"
+    echo "  • TP 节点: peer0.tp.example.com:11051"
+    echo "  • 通道名称: trainingchannel / inferencechannel"
     echo "  • 智能合约: simple"
+    echo "  • 策略模式: ${CHAINCODE_STRATEGY}"
     echo ""
     echo "运行中的容器："
-    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" --filter "name=peer0.org1.example.com" --filter "name=peer0.org2.example.com" --filter "name=orderer.example.com"
+    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" --filter "name=peer0.org1.example.com" --filter "name=peer0.org2.example.com" --filter "name=peer0.tp.example.com" --filter "name=orderer.example.com"
     echo ""
     echo -e "${YELLOW}常用命令:${NC}"
     echo "  • 查看日志: docker logs -f <container_name>"
@@ -258,6 +262,20 @@ if [ "$1" = "clean" ] || [ "$1" = "cleanup" ]; then
     print_success "环境清理完成"
     exit 0
 fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --strategy)
+            CHAINCODE_STRATEGY="$2"
+            shift 2
+            ;;
+        *)
+            print_error "未知参数: $1"
+            echo "用法: ./deploy.sh [clean] [--strategy vpsa|default]"
+            exit 1
+            ;;
+    esac
+done
 
 # 检查依赖
 if ! command -v docker &> /dev/null; then

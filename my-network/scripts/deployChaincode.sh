@@ -11,11 +11,45 @@ CC_SRC_PATH="${ROOTDIR}/chaincode"
 CC_VERSION="1.0"
 TRAINING_CHANNEL="trainingchannel"
 INFERENCE_CHANNEL="inferencechannel"
+STRATEGY="default"
 
 ORDERER_CA="${ROOTDIR}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
 ORG1_TLS="${ROOTDIR}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
 ORG2_TLS="${ROOTDIR}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
 TP_TLS="${ROOTDIR}/organizations/peerOrganizations/tp.example.com/peers/peer0.tp.example.com/tls/ca.crt"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --strategy)
+      STRATEGY="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      echo "Usage: $0 [--strategy vpsa|default]"
+      exit 1
+      ;;
+  esac
+done
+
+COLLECTIONS_TRAINING_ARGS=()
+COLLECTIONS_INFERENCE_ARGS=()
+if [[ "${STRATEGY}" == "vpsa" ]]; then
+  COLLECTIONS_TRAINING_FILE="${ROOTDIR}/pdc/collections.training.json"
+  COLLECTIONS_INFERENCE_FILE="${ROOTDIR}/pdc/collections.inference.json"
+  
+  if [[ ! -f "${COLLECTIONS_TRAINING_FILE}" ]]; then
+    echo "Missing Training PDC config: ${COLLECTIONS_TRAINING_FILE}"
+    exit 1
+  fi
+  if [[ ! -f "${COLLECTIONS_INFERENCE_FILE}" ]]; then
+    echo "Missing Inference PDC config: ${COLLECTIONS_INFERENCE_FILE}"
+    exit 1
+  fi
+  
+  COLLECTIONS_TRAINING_ARGS=(--collections-config "${COLLECTIONS_TRAINING_FILE}")
+  COLLECTIONS_INFERENCE_ARGS=(--collections-config "${COLLECTIONS_INFERENCE_FILE}")
+fi
 
 # Auto-detect current sequence number for a channel
 detectSequence() {
@@ -33,6 +67,11 @@ detectSequence() {
 echo "=========================================="
 echo "Deploying Chaincode: ${CC_NAME}"
 echo "Version: ${CC_VERSION}"
+echo "Strategy: ${STRATEGY}"
+if [[ "${STRATEGY}" == "vpsa" ]]; then
+  echo "Training PDC: ${COLLECTIONS_TRAINING_FILE}"
+  echo "Inference PDC: ${COLLECTIONS_INFERENCE_FILE}"
+fi
 echo "=========================================="
 
 # Step 0: Vendor Go dependencies (required for Docker deployment)
@@ -111,6 +150,7 @@ peer lifecycle chaincode approveformyorg \
   --version ${CC_VERSION} \
   --package-id ${PACKAGE_ID} \
   --sequence ${CC_SEQUENCE} \
+  "${COLLECTIONS_TRAINING_ARGS[@]}" \
   --tls \
   --cafile ${ORDERER_CA} \
   -o localhost:7050 \
@@ -132,6 +172,7 @@ peer lifecycle chaincode approveformyorg \
   --version ${CC_VERSION} \
   --package-id ${PACKAGE_ID} \
   --sequence ${CC_SEQUENCE} \
+  "${COLLECTIONS_TRAINING_ARGS[@]}" \
   --tls \
   --cafile ${ORDERER_CA} \
   -o localhost:7050 \
@@ -152,6 +193,7 @@ peer lifecycle chaincode commit \
   --name ${CC_NAME} \
   --version ${CC_VERSION} \
   --sequence ${CC_SEQUENCE} \
+  "${COLLECTIONS_TRAINING_ARGS[@]}" \
   --tls \
   --cafile ${ORDERER_CA} \
   -o localhost:7050 \
@@ -188,7 +230,8 @@ peer lifecycle chaincode approveformyorg \
   --tls \
   --cafile ${ORDERER_CA} \
   -o localhost:7050 \
-  --ordererTLSHostnameOverride orderer.example.com
+  --ordererTLSHostnameOverride orderer.example.com \
+  "${COLLECTIONS_INFERENCE_ARGS[@]}"
 echo "✓ Approved for Org1"
 
 # Approve for Org2
@@ -209,7 +252,8 @@ peer lifecycle chaincode approveformyorg \
   --tls \
   --cafile ${ORDERER_CA} \
   -o localhost:7050 \
-  --ordererTLSHostnameOverride orderer.example.com
+  --ordererTLSHostnameOverride orderer.example.com \
+  "${COLLECTIONS_INFERENCE_ARGS[@]}"
 echo "✓ Approved for Org2"
 
 # Approve for TP
@@ -230,7 +274,8 @@ peer lifecycle chaincode approveformyorg \
   --tls \
   --cafile ${ORDERER_CA} \
   -o localhost:7050 \
-  --ordererTLSHostnameOverride orderer.example.com
+  --ordererTLSHostnameOverride orderer.example.com \
+  "${COLLECTIONS_INFERENCE_ARGS[@]}"
 echo "✓ Approved for TP"
 
 # Commit on Inference Channel
@@ -253,7 +298,8 @@ peer lifecycle chaincode commit \
   --ordererTLSHostnameOverride orderer.example.com \
   --peerAddresses localhost:7051 --tlsRootCertFiles ${ORG1_TLS} \
   --peerAddresses localhost:9051 --tlsRootCertFiles ${ORG2_TLS} \
-  --peerAddresses localhost:11051 --tlsRootCertFiles ${TP_TLS}
+  --peerAddresses localhost:11051 --tlsRootCertFiles ${TP_TLS} \
+  "${COLLECTIONS_INFERENCE_ARGS[@]}"
 echo "✓ Inference Channel deployment complete"
 
 echo ""
@@ -262,3 +308,8 @@ echo "✓ All Deployments Complete"
 echo "=========================================="
 echo "Training Channel: Org1 + Org2"
 echo "Inference Channel: Org1 + Org2 + TP"
+if [[ "${STRATEGY}" == "vpsa" ]]; then
+  echo "PDC Configuration: enabled"
+  echo "  Training PDC: vpsaOrg1Shards, vpsaOrg2Shards"
+  echo "  Inference PDC: inferenceTPShards, inferenceOrg1Shards, inferenceOrg2Shards"
+fi
