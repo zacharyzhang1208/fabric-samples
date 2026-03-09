@@ -6,7 +6,7 @@ ROOTDIR=$(cd "$(dirname "$0")/.." && pwd)
 export PATH="${ROOTDIR}/../bin:${PATH}"
 export FABRIC_CFG_PATH="${ROOTDIR}"
 
-CC_NAME="simple"
+CC_NAME="contracts"
 CC_SRC_PATH="${ROOTDIR}/chaincode"
 CC_VERSION="1.0"
 TRAINING_CHANNEL="trainingchannel"

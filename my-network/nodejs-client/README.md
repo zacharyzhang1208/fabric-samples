@@ -249,7 +249,7 @@ nodejs-client/
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `FABRIC_CHANNEL` | `mychannel` | 通道名称 |
-| `FABRIC_CHAINCODE` | `simple` | 链码名称 |
+| `FABRIC_CHAINCODE` | `contracts` | 链码名称 |
 | `FABRIC_MSP_ID` | `Org1MSP` | 组织 MSP ID |
 | `FABRIC_PEER_ENDPOINT` | `localhost:7051` | Peer 地址 |
 | `FABRIC_ORDERER_ENDPOINT` | `localhost:7050` | Orderer 地址 |
@@ -259,7 +259,7 @@ nodejs-client/
 ```bash
 # .env
 FABRIC_CHANNEL=mychannel
-FABRIC_CHAINCODE=simple
+FABRIC_CHAINCODE=contracts
 ```
 
 ## 🎯 API 示例

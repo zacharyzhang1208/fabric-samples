@@ -8,12 +8,17 @@ import (
 )
 
 func main() {
-	simpleChaincode, err := contractapi.NewChaincode(&contract.SimpleContract{})
+	// Register all contracts
+	chaincode, err := contractapi.NewChaincode(
+		&contract.SimpleContract{},      // Basic key-value and PDC operations
+		&contract.AggregationContract{}, // Federated learning aggregation (Training Channel)
+		&contract.InferenceContract{},   // Secure inference (Inference Channel)
+	)
 	if err != nil {
-		log.Panicf("Error creating simple chaincode: %v", err)
+		log.Panicf("Error creating chaincode: %v", err)
 	}
 
-	if err := simpleChaincode.Start(); err != nil {
-		log.Panicf("Error starting simple chaincode: %v", err)
+	if err := chaincode.Start(); err != nil {
+		log.Panicf("Error starting chaincode: %v", err)
 	}
 }

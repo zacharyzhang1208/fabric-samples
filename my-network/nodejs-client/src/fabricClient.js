@@ -8,6 +8,11 @@ function readUtf8(filePath) {
 }
 
 function readFirstFile(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    throw new Error(
+      `Missing crypto directory: ${dirPath}. Run './deploy.sh --strategy vpsa' first (or regenerate organizations).`
+    );
+  }
   const files = fs.readdirSync(dirPath);
   if (!files.length) {
     throw new Error(`No files found in directory: ${dirPath}`);
@@ -29,6 +34,12 @@ function buildIdentity() {
   const certPath = path.join(base, 'signcerts', `Admin@${config.orgDomain}-cert.pem`);
   const keyDir = path.join(base, 'keystore');
   const keyPath = readFirstFile(keyDir);
+
+  if (!fs.existsSync(certPath)) {
+    throw new Error(
+      `Missing admin cert: ${certPath}. Run './deploy.sh --strategy vpsa' first (or regenerate organizations).`
+    );
+  }
 
   return {
     credentials: {
@@ -132,6 +143,67 @@ class FabricClient {
     }
     await this.contract.submitTransaction('Set', key, value);
     return { key, value };
+  }
+
+  async submit(functionName, ...args) {
+    if (!this.contract) {
+      throw new Error('Client is not connected');
+    }
+    return this.contract.submitTransaction(functionName, ...args.map(String));
+  }
+
+  async evaluate(functionName, ...args) {
+    if (!this.contract) {
+      throw new Error('Client is not connected');
+    }
+    return this.contract.evaluateTransaction(functionName, ...args.map(String));
+  }
+
+  async initSyncRound(round, expectedParticipants = 2) {
+    return this.submit('AggregationContract:InitSyncRound', round, expectedParticipants);
+  }
+
+  async submitLocalUpdateSync(collection, round, updateData, sampleCount) {
+    return this.submit(
+      'AggregationContract:SubmitLocalUpdateSync',
+      collection,
+      round,
+      updateData,
+      sampleCount
+    );
+  }
+
+  async finalizeSyncRound(round) {
+    return this.submit('AggregationContract:FinalizeSyncRound', round);
+  }
+
+  async submitLocalUpdateAsync(collection, updateData, sampleCount) {
+    return this.submit(
+      'AggregationContract:SubmitLocalUpdateAsync',
+      collection,
+      updateData,
+      sampleCount
+    );
+  }
+
+  async getGlobalModel(round) {
+    const result = await this.evaluate('AggregationContract:GetGlobalModel', round);
+    return JSON.parse(result.toString());
+  }
+
+  async getLatestModelVersion() {
+    const result = await this.evaluate('AggregationContract:GetLatestModelVersion');
+    return Number(result.toString());
+  }
+
+  async getGlobalModelByVersion(version) {
+    const result = await this.evaluate('AggregationContract:GetGlobalModelByVersion', version);
+    return JSON.parse(result.toString());
+  }
+
+  async getRoundStatus(round) {
+    const result = await this.evaluate('AggregationContract:GetRoundStatus', round);
+    return JSON.parse(result.toString());
   }
 
   async get(key) {

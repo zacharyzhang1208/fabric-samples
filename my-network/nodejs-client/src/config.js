@@ -4,8 +4,9 @@ const projectRoot = path.resolve(__dirname, '..', '..');
 
 module.exports = {
   projectRoot,
-  channelName: process.env.FABRIC_CHANNEL || 'mychannel',
-  chaincodeName: process.env.FABRIC_CHAINCODE || 'simple',
+  channelName: process.env.FABRIC_CHANNEL || 'trainingchannel',
+  chaincodeName: process.env.FABRIC_CHAINCODE || 'contracts',
+  flMode: process.env.FL_MODE || 'sync',
   orgMspId: process.env.FABRIC_MSP_ID || 'Org1MSP',
   peerEndpoint: process.env.FABRIC_PEER_ENDPOINT || 'localhost:7051',
   peerHostAlias: process.env.FABRIC_PEER_HOST_ALIAS || 'peer0.org1.example.com',

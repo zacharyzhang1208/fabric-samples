@@ -8,6 +8,7 @@
 
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 // Configuration for each client: org, node, port, organization parameters
 const CLIENTS = [
@@ -60,7 +61,10 @@ const CLIENTS = [
   },
 ];
 
-function launchClient(config, rounds, epochs) {
+function launchClient(config, epochs, mode) {
+  const org1NodeCount = CLIENTS.filter((c) => c.orgMspId === 'Org1MSP').length;
+  const org2NodeCount = CLIENTS.filter((c) => c.orgMspId === 'Org2MSP').length;
+
   const args = [
     path.join(__dirname, 'flClient.js'),
     '--org', config.org,
@@ -70,8 +74,10 @@ function launchClient(config, rounds, epochs) {
     '--org-msp-id', config.orgMspId,
     '--peer-name', config.peerName,
     '--peer-endpoint', config.peerEndpoint,
-    '--rounds', String(rounds),
+    '--org1-node-count', String(org1NodeCount),
+    '--org2-node-count', String(org2NodeCount),
     '--epochs', String(epochs),
+    '--mode', mode,
   ];
 
   const clientId = `${config.org}-N${config.node}`;
@@ -80,6 +86,10 @@ function launchClient(config, rounds, epochs) {
   const child = spawn('node', args, {
     stdio: 'inherit',
     cwd: path.join(__dirname, '..'),
+    env: {
+      ...process.env,
+      TF_CPP_MIN_LOG_LEVEL: process.env.TF_CPP_MIN_LOG_LEVEL || '2',
+    },
   });
 
   child.on('error', (err) => {
@@ -98,15 +108,50 @@ function launchClient(config, rounds, epochs) {
 }
 
 async function main() {
-  const rounds = process.argv[2] ? Number(process.argv[2]) : 3;
-  const epochs = process.argv[3] ? Number(process.argv[3]) : 3;
+  const epochs = process.argv[2] ? Number(process.argv[2]) : 10;
+  const mode = process.argv[3] || 'sync';
 
   console.log(`[LAUNCHER] Starting ${CLIENTS.length} FL clients`);
   console.log(`[LAUNCHER] Topology: Bank A (Org1) - 2 nodes, Bank B (Org2) - 3 nodes`);
-  console.log(`[LAUNCHER] Configuration: rounds=${rounds}, epochs=${epochs}`);
+  console.log(`[LAUNCHER] Configuration: epochs=${epochs} (each epoch = 1 FL round)`);
+  console.log(`[LAUNCHER] FL mode: ${mode}`);
+  console.log(`[LAUNCHER] Usage: node launchClients.js [epochs] [mode]`);
+  console.log(`[LAUNCHER] Example: node launchClients.js 10 sync\n`);
   console.log(`[LAUNCHER] Each client uses its own organization credentials\n`);
 
-  const processes = CLIENTS.map((config) => launchClient(config, rounds, epochs));
+  const projectRoot = path.join(__dirname, '..', '..');
+  const requiredAdminKeystores = [
+    path.join(
+      projectRoot,
+      'organizations',
+      'peerOrganizations',
+      'org1.example.com',
+      'users',
+      'Admin@org1.example.com',
+      'msp',
+      'keystore'
+    ),
+    path.join(
+      projectRoot,
+      'organizations',
+      'peerOrganizations',
+      'org2.example.com',
+      'users',
+      'Admin@org2.example.com',
+      'msp',
+      'keystore'
+    ),
+  ];
+
+  const missing = requiredAdminKeystores.filter((p) => !fs.existsSync(p));
+  if (missing.length > 0) {
+    console.error('[LAUNCHER] Missing Fabric crypto materials:');
+    missing.forEach((p) => console.error(`  - ${p}`));
+    console.error("[LAUNCHER] Please run from project root: ./deploy.sh --strategy vpsa");
+    process.exit(1);
+  }
+
+  const processes = CLIENTS.map((config) => launchClient(config, epochs, mode));
 
   // Wait for all processes to complete
   await Promise.all(
@@ -119,6 +164,18 @@ async function main() {
   );
 
   console.log(`\n[LAUNCHER] All clients completed`);
+  
+  // Generate training report
+  console.log(`\n[LAUNCHER] Generating training report...`);
+  const reportScript = path.join(__dirname, 'generateReport.js');
+  const reportProc = spawn('node', [reportScript], {
+    stdio: 'inherit',
+    cwd: path.join(__dirname, '..'),
+  });
+  
+  await new Promise((resolve) => {
+    reportProc.on('exit', resolve);
+  });
 }
 
 main().catch(console.error);

@@ -11,7 +11,7 @@ export FABRIC_CFG_PATH=${ROOTDIR}
 
 TRAINING_CHANNEL="trainingchannel"
 INFERENCE_CHANNEL="inferencechannel"
-CC_NAME="simple"
+CC_NAME="contracts"
 ORDERER_CA=${ROOTDIR}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
 
 # 设置 Org1 环境变量
@@ -41,6 +41,37 @@ setTPEnv() {
     export CORE_PEER_ADDRESS=localhost:11051
 }
 
+# 带重试的查询（解决提交后短时间内部分 peer 还未可读的问题）
+queryWithRetry() {
+    local channel=$1
+    local key=$2
+    local peerAddress=$3
+    local tlsRootCert=$4
+    local maxRetry=${5:-12}
+    local sleepSec=${6:-2}
+
+    local i=1
+    while [ $i -le $maxRetry ]; do
+        if peer chaincode query \
+            -C ${channel} \
+            -n ${CC_NAME} \
+            --peerAddresses ${peerAddress} \
+            --tlsRootCertFiles ${tlsRootCert} \
+            -c "{\"function\":\"Get\",\"Args\":[\"${key}\"]}"; then
+            return 0
+        fi
+
+        if [ $i -lt $maxRetry ]; then
+            echo "  Query retry ${i}/${maxRetry} for key ${key} on ${peerAddress}..."
+            sleep ${sleepSec}
+        fi
+        i=$((i + 1))
+    done
+
+    echo "Query failed after ${maxRetry} retries for key ${key} on ${peerAddress}"
+    return 1
+}
+
 echo "=========================================="
 echo "测试 Training Channel (Org1 + Org2)"
 echo "=========================================="
@@ -66,10 +97,13 @@ sleep 2
 echo ""
 echo "2. Org2 查询 Org1 的训练更新（同通道可见）"
 setOrg2Env
-peer chaincode query \
-    -C ${TRAINING_CHANNEL} \
-    -n ${CC_NAME} \
-    -c '{"function":"Get","Args":["training:org1:update1"]}'
+queryWithRetry \
+    ${TRAINING_CHANNEL} \
+    "training:org1:update1" \
+    "localhost:9051" \
+    "${ROOTDIR}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt" \
+    8 \
+    1
 
 echo ""
 echo "3. Org2 提交训练更新到 Training Channel"
@@ -115,18 +149,24 @@ sleep 2
 echo ""
 echo "5. TP 查询全局模型（Inference Channel 可见）"
 setTPEnv
-peer chaincode query \
-    -C ${INFERENCE_CHANNEL} \
-    -n ${CC_NAME} \
-    -c '{"function":"Get","Args":["global_model:v1"]}'
+queryWithRetry \
+    ${INFERENCE_CHANNEL} \
+    "global_model:v1" \
+    "localhost:11051" \
+    "${ROOTDIR}/organizations/peerOrganizations/tp.example.com/peers/peer0.tp.example.com/tls/ca.crt" \
+    15 \
+    2
 
 echo ""
 echo "6. Org2 从 Inference Channel 查询全局模型"
 setOrg2Env
-peer chaincode query \
-    -C ${INFERENCE_CHANNEL} \
-    -n ${CC_NAME} \
-    -c '{"function":"Get","Args":["global_model:v1"]}'
+queryWithRetry \
+    ${INFERENCE_CHANNEL} \
+    "global_model:v1" \
+    "localhost:9051" \
+    "${ROOTDIR}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt" \
+    12 \
+    2
 
 echo ""
 echo "=========================================="
