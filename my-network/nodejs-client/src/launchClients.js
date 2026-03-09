@@ -28,8 +28,8 @@ const CLIENTS = [
     port: 3002,
     orgDomain: 'org1.example.com',
     orgMspId: 'Org1MSP',
-    peerName: 'peer1.org1.example.com',
-    peerEndpoint: 'localhost:7151',
+    peerName: 'peer0.org1.example.com',
+    peerEndpoint: 'localhost:7051',
   },
   // Bank B - Org2 (3 nodes)
   {
@@ -47,8 +47,8 @@ const CLIENTS = [
     port: 3004,
     orgDomain: 'org2.example.com',
     orgMspId: 'Org2MSP',
-    peerName: 'peer1.org2.example.com',
-    peerEndpoint: 'localhost:9151',
+    peerName: 'peer0.org2.example.com',
+    peerEndpoint: 'localhost:9051',
   },
   {
     org: 'B',
@@ -56,12 +56,12 @@ const CLIENTS = [
     port: 3005,
     orgDomain: 'org2.example.com',
     orgMspId: 'Org2MSP',
-    peerName: 'peer2.org2.example.com',
-    peerEndpoint: 'localhost:9251',
+    peerName: 'peer0.org2.example.com',
+    peerEndpoint: 'localhost:9051',
   },
 ];
 
-function launchClient(config, epochs, mode) {
+function launchClient(config, epochs, mode, dataset = 'simple') {
   const org1NodeCount = CLIENTS.filter((c) => c.orgMspId === 'Org1MSP').length;
   const org2NodeCount = CLIENTS.filter((c) => c.orgMspId === 'Org2MSP').length;
 
@@ -78,6 +78,7 @@ function launchClient(config, epochs, mode) {
     '--org2-node-count', String(org2NodeCount),
     '--epochs', String(epochs),
     '--mode', mode,
+    '--dataset', dataset,
   ];
 
   const clientId = `${config.org}-N${config.node}`;
@@ -110,14 +111,17 @@ function launchClient(config, epochs, mode) {
 async function main() {
   const epochs = process.argv[2] ? Number(process.argv[2]) : 10;
   const mode = process.argv[3] || 'sync';
+  const dataset = process.argv[4] || 'simple';
 
   console.log(`[LAUNCHER] Starting ${CLIENTS.length} FL clients`);
   console.log(`[LAUNCHER] Topology: Bank A (Org1) - 2 nodes, Bank B (Org2) - 3 nodes`);
-  console.log(`[LAUNCHER] Configuration: epochs=${epochs} (each epoch = 1 FL round)`);
-  console.log(`[LAUNCHER] FL mode: ${mode}`);
-  console.log(`[LAUNCHER] Usage: node launchClients.js [epochs] [mode]`);
-  console.log(`[LAUNCHER] Example: node launchClients.js 10 sync\n`);
-  console.log(`[LAUNCHER] Each client uses its own organization credentials\n`);
+  console.log(`[LAUNCHER] Configuration: epochs=${epochs}, mode=${mode}, dataset=${dataset}`);
+  console.log(`[LAUNCHER] Usage: node launchClients.js [epochs] [mode] [dataset]`);
+  console.log(`[LAUNCHER] Example: node launchClients.js 10 sync mnist\n`);
+  
+  const { DataLoaderFactory } = require('./dataLoaders');
+  const availableDatasets = DataLoaderFactory.getAvailable();
+  console.log(`[LAUNCHER] Available datasets: ${availableDatasets.join(', ')}\n`);
 
   const projectRoot = path.join(__dirname, '..', '..');
   const requiredAdminKeystores = [
@@ -151,7 +155,7 @@ async function main() {
     process.exit(1);
   }
 
-  const processes = CLIENTS.map((config) => launchClient(config, epochs, mode));
+  const processes = CLIENTS.map((config) => launchClient(config, epochs, mode, dataset));
 
   // Wait for all processes to complete
   await Promise.all(
@@ -167,8 +171,8 @@ async function main() {
   
   // Generate training report
   console.log(`\n[LAUNCHER] Generating training report...`);
-  const reportScript = path.join(__dirname, 'generateReport.js');
-  const reportProc = spawn('node', [reportScript], {
+  const reportScript = path.join(__dirname, 'utils', 'generateReport.js');
+  const reportProc = spawn('node', [reportScript, dataset], {
     stdio: 'inherit',
     cwd: path.join(__dirname, '..'),
   });

@@ -8,9 +8,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const MODELS_DIR = path.join(__dirname, '..', 'models');
-const REPORTS_DIR = path.join(__dirname, '..', 'reports');
-const OUTPUT_FILE = path.join(REPORTS_DIR, 'fl-training-report.html');
+const DATASET = (process.argv[2] || process.env.FL_DATASET || 'simple').toLowerCase();
+const MODELS_DIR = path.join(__dirname, '..', '..', 'models', DATASET);
+const REPORTS_DIR = path.join(__dirname, '..', '..', 'reports');
+const OUTPUT_FILE = path.join(REPORTS_DIR, `fl-training-report-${DATASET}.html`);
 
 function loadGlobalModels() {
   const files = fs.readdirSync(MODELS_DIR);
@@ -70,8 +71,8 @@ function generateHTMLReport(models) {
 <body>
   <div class="error">
     <h1>No Training Data Found</h1>
-    <p>No global model files found in the models directory.</p>
-    <p>Run training first: <code>node src/launchClients.js 5 sync</code></p>
+    <p>No global model files found in <code>models/${DATASET}</code>.</p>
+    <p>Run training first: <code>node src/launchClients.js 5 sync ${DATASET}</code></p>
   </div>
 </body>
 </html>`;
@@ -434,15 +435,12 @@ ${models.map(m => {
 }
 
 function main() {
-  console.log('🔍 Scanning models directory...');
-  
   if (!fs.existsSync(MODELS_DIR)) {
     console.error('❌ Models directory not found:', MODELS_DIR);
     process.exit(1);
   }
   
   const models = loadGlobalModels();
-  console.log(`📦 Found ${models.length} global model files`);
   
   if (models.length === 0) {
     console.warn('⚠️  No global model files found. Run training first.');

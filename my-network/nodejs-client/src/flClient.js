@@ -257,6 +257,11 @@ function buildClientFabricClient(options) {
       return JSON.parse(result.toString());
     }
 
+    async getOrgRoundStatus(round, orgID) {
+      const result = await this.evaluate('AggregationContract:GetOrgRoundStatus', round, orgID);
+      return JSON.parse(result.toString());
+    }
+
     async submitLocalUpdateAsync(collection, weightsJson, sampleCount) {
       return this.submit(
         'AggregationContract:SubmitLocalUpdateAsync',
@@ -306,6 +311,7 @@ class FlClient {
     this.projectRoot = options.projectRoot;
     this.org1NodeCount = options.org1NodeCount || 2;
     this.org2NodeCount = options.org2NodeCount || 3;
+    this.dataset = options.dataset || 'simple';
     
     this.FabricClient = buildClientFabricClient({
       orgDomain: this.orgDomain,
@@ -320,12 +326,14 @@ class FlClient {
     this.model = null;
     this.localData = null;
     this.mode = options.mode || 'sync';
+    this.dataLoader = null;
   }
 
   async initialize() {
     console.log(`[${this.clientId}] Initializing... (${this.orgDomain}/${this.peerName})`);
+    console.log(`[${this.clientId}] Using dataset: ${this.dataset}`);
     await this.setupFabricClient();
-    this.generateLocalDataset();
+    await this.generateLocalDataset();
     this.buildModel();
   }
 
@@ -333,6 +341,7 @@ class FlClient {
     this.fabricClient = new this.FabricClient();
     try {
       await this.fabricClient.connect();
+      await this.verifyFabricReady();
       console.log(`[${this.clientId}] Connected to Fabric (${this.peerName})`);
     } catch (err) {
       console.error(`[${this.clientId}] Failed to connect to Fabric:`, err.message);
@@ -340,47 +349,24 @@ class FlClient {
     }
   }
 
-  generateLocalDataset() {
-    // Client-specific drift: different data distribution per node
-    const samples = 20;
-    const clientDrift = (this.clientId.charCodeAt(0) % 3) * 0.1; // 0.0, 0.1, 0.2
-
-    const xs = [];
-    const ys = [];
-
-    for (let i = 0; i < samples; i++) {
-      const x = Math.random() * 10 - 5;
-      const y = 2 * x + 1 + (Math.random() * 2 - 1) + clientDrift;
-      xs.push(x);
-      ys.push(y);
+  async generateLocalDataset() {
+    const { DataLoaderFactory } = require('./dataLoaders');
+    this.dataLoader = DataLoaderFactory.create(this.dataset, this.clientId);
+    
+    if (this.dataset === 'simple' || this.dataset === 'linear') {
+      this.localData = await this.dataLoader.load();
+      console.log(`[${this.clientId}] Generated local dataset: ${this.localData.sampleCount} samples`);
+    } else if (this.dataset === 'mnist') {
+      this.localData = await this.dataLoader.load();
+      console.log(`[${this.clientId}] Loaded MNIST dataset: ${this.localData.sampleCount} samples`);
+    } else {
+      throw new Error(`Unknown dataset: ${this.dataset}`);
     }
-
-    this.localData = {
-      xs: tf.tensor1d(xs),
-      ys: tf.tensor1d(ys),
-      sampleCount: samples,
-    };
-
-    console.log(`[${this.clientId}] Generated local dataset: ${samples} samples (drift=${clientDrift})`);
   }
 
   buildModel() {
-    this.model = tf.sequential({
-      layers: [
-        tf.layers.dense({
-          inputShape: [1],
-          units: 1,
-          activation: 'linear',
-        }),
-      ],
-    });
-
-    this.model.compile({
-      optimizer: tf.train.sgd(0.03),
-      loss: 'meanSquaredError',
-    });
-
-    console.log(`[${this.clientId}] Model initialized`);
+    this.model = this.dataLoader.buildModel();
+    console.log(`[${this.clientId}] Model initialized (${this.dataset})`);
   }
 
   sleep(ms) {
@@ -406,6 +392,8 @@ class FlClient {
     return (
       msg.includes('MVCC_READ_CONFLICT') ||
       msg.includes('not ready') ||
+      msg.includes('Peer endorsements do not match') ||
+      msg.includes('endorsements do not match') ||
       msg.includes('org round') && msg.includes('not ready') ||
       (msg.includes('round') && msg.includes('not initialized'))
     );
@@ -419,20 +407,75 @@ class FlClient {
     return msg.includes('global model not found for round');
   }
 
+  isRoundNotReady(msg) {
+    return (
+      msg.includes('round') && msg.includes('not ready')
+    );
+  }
+
+  isConnectionError(msg) {
+    return (
+      msg.includes('is not connected') ||
+      msg.includes('not running chaincode contracts') ||
+      msg.includes('No valid responses from any peers') ||
+      msg.includes('failed to connect')
+    );
+  }
+
+  async reconnectFabricClient() {
+    try {
+      if (this.fabricClient) {
+        await this.fabricClient.disconnect();
+      }
+    } catch (err) {
+      // Ignore disconnect errors during reconnect.
+    }
+
+    this.fabricClient = new this.FabricClient();
+    await this.fabricClient.connect();
+    console.log(`[${this.clientId}] Reconnected to Fabric (${this.peerName})`);
+  }
+
+  async verifyFabricReady() {
+    await this.withRetry(
+      'StartupFabricHealthCheck',
+      async () => {
+        await this.fabricClient.getCurrentRound();
+      },
+      {
+        attempts: 4,
+        initialDelayMs: 250,
+        reconnectOnConnectionError: true,
+        treatIdempotentAsSuccess: false,
+      }
+    );
+  }
+
   async withRetry(label, fn, options = {}) {
     const {
       attempts = 8,
       initialDelayMs = 200,
       maxDelayMs = 2000,
       treatIdempotentAsSuccess = true,
+      reconnectOnConnectionError = false,
     } = options;
 
     let delay = initialDelayMs;
+    let hasReconnected = false;
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
         return await fn();
       } catch (err) {
         const msg = this.getErrMessage(err);
+
+        if (reconnectOnConnectionError && !hasReconnected && this.isConnectionError(msg)) {
+          try {
+            await this.reconnectFabricClient();
+            hasReconnected = true;
+          } catch (reconnectErr) {
+            console.warn(`[${this.clientId}] Reconnect failed: ${this.getErrMessage(reconnectErr)}`);
+          }
+        }
 
         if (treatIdempotentAsSuccess && this.isIdempotentSuccess(msg)) {
           console.log(`[${this.clientId}] ${label}: idempotent success (${msg})`);
@@ -456,34 +499,102 @@ class FlClient {
     return null;
   }
 
+  async waitForContractSignal(label, fetchStatus, isReady, options = {}) {
+    const {
+      attempts = 40,
+      intervalMs = 1000,
+      reconnectOnConnectionError = true,
+    } = options;
+
+    let lastError = null;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        const status = await fetchStatus();
+        if (isReady(status)) {
+          return status;
+        }
+      } catch (err) {
+        lastError = err;
+        if (reconnectOnConnectionError && this.isConnectionError(this.getErrMessage(err))) {
+          try {
+            await this.reconnectFabricClient();
+          } catch (reconnectErr) {
+            console.warn(`[${this.clientId}] ${label} reconnect failed: ${this.getErrMessage(reconnectErr)}`);
+          }
+        }
+      }
+
+      if (attempt < attempts) {
+        await this.sleep(intervalMs);
+      }
+    }
+
+    if (lastError) {
+      throw new Error(`${label} timed out: ${this.getErrMessage(lastError)}`);
+    }
+    throw new Error(`${label} timed out: readiness condition not met`);
+  }
+
   async trainOneEpoch() {
     console.log(`[${this.clientId}] Training for 1 epoch...`);
-    const xs = tf.reshape(this.localData.xs, [-1, 1]);
-    await this.model.fit(xs, this.localData.ys, {
-      epochs: 1,
-      batchSize: 8,
-      verbose: 0,
-    });
+    
+    if (this.dataset === 'simple' || this.dataset === 'linear') {
+      const xs = tf.reshape(this.localData.xs, [-1, 1]);
+      await this.model.fit(xs, this.localData.ys, {
+        epochs: 1,
+        batchSize: 8,
+        verbose: 0,
+      });
+      xs.dispose();
+    } else if (this.dataset === 'mnist') {
+      // MNIST: reshape images to 28x28x1 format for CNN
+      const images = this.localData.images;
+      const labels = this.localData.labels;
+      
+      // Flatten nested array structure and create 4D tensor
+      const imageData = [];
+      for (let img of images) {
+        imageData.push(...img);
+      }
+      
+      const xs = tf.tensor4d(imageData, [images.length, 28, 28, 1]);
+      const ys = tf.tensor2d(labels);
+      
+      await this.model.fit(xs, ys, {
+        epochs: 1,
+        batchSize: 32,
+        verbose: 0,
+      });
+      
+      xs.dispose();
+      ys.dispose();
+    }
+    
     console.log(`[${this.clientId}] Epoch training complete`);
   }
 
   getLocalModelUpdate() {
-    const weights = this.model.getWeights();
-    const w = weights[0].dataSync()[0]; // weight parameter
-    const b = weights[1].dataSync()[0]; // bias parameter
-    return [w, b];
+    if (this.dataset === 'simple' || this.dataset === 'linear') {
+      const weights = this.model.getWeights();
+      const w = weights[0].dataSync()[0]; // weight parameter
+      const b = weights[1].dataSync()[0]; // bias parameter
+      return [w, b];
+    } else if (this.dataset === 'mnist') {
+      // Serialize CNN weights as flattened 1D array
+      return this.dataLoader.serializeModelUpdate(this.model);
+    }
+    throw new Error(`Unknown dataset: ${this.dataset}`);
   }
 
   async submitUpdateToChain(epoch) {
     if (!this.fabricClient) {
       console.log(`[${this.clientId}] Not connected to Fabric, skipping submission`);
-      return;
+      return false;
     }
 
     const update = this.getLocalModelUpdate();
     const value = JSON.stringify(update);
     const collection = this.orgMspId === 'Org1MSP' ? 'vpsaOrg1Shards' : 'vpsaOrg2Shards';
-    const isOrgSubmitter = this.nodeId === 1;
     const nodeID = String(this.nodeId);
 
     try {
@@ -491,7 +602,7 @@ class FlClient {
         await this.withRetry(
           `InitHierarchicalRound(${epoch})`,
           () => this.fabricClient.initHierarchicalRound(epoch, 2, this.org1NodeCount, this.org2NodeCount),
-          { attempts: 8, initialDelayMs: 150 }
+          { attempts: 8, initialDelayMs: 150, reconnectOnConnectionError: true }
         );
 
         await this.withRetry(
@@ -504,36 +615,56 @@ class FlClient {
               value,
               this.localData.sampleCount
             ),
-          { attempts: 10, initialDelayMs: 200 }
+          { attempts: 10, initialDelayMs: 200, reconnectOnConnectionError: true }
         );
         console.log(`[${this.clientId}] Submitted node-level SYNC update for epoch ${epoch}`);
 
-        // One representative per organization drives org-level and global finalize calls.
-        if (!isOrgSubmitter) {
-          return;
-        }
+        // Contract signal 1: wait until all nodes in this org submitted before org finalize.
+        await this.waitForContractSignal(
+          `OrgRoundReady(${epoch}, ${this.orgMspId})`,
+          () => this.fabricClient.getOrgRoundStatus(epoch, this.orgMspId),
+          (status) =>
+            status &&
+            Array.isArray(status.submittedNodeIds) &&
+            Number.isInteger(status.expectedNodes) &&
+            status.submittedNodeIds.length >= status.expectedNodes,
+          { attempts: 60, intervalMs: 1000 }
+        );
 
         await this.withRetry(
           `FinalizeOrgSyncRound(${epoch})`,
           () => this.fabricClient.finalizeOrgSyncRound(epoch),
-          { attempts: 20, initialDelayMs: 250 }
+          { attempts: 20, initialDelayMs: 250, reconnectOnConnectionError: true }
         );
         console.log(`[${this.clientId}] Finalized org-level sync epoch ${epoch}`);
+
+        // Contract signal 2: wait until both org-level updates are submitted before global finalize.
+        await this.waitForContractSignal(
+          `RoundReadyForGlobalFinalize(${epoch})`,
+          () => this.fabricClient.getRoundStatus(epoch),
+          (status) =>
+            status &&
+            Array.isArray(status.submittedOrgs) &&
+            Number.isInteger(status.expectedCount) &&
+            status.submittedOrgs.length >= status.expectedCount,
+          { attempts: 60, intervalMs: 1000 }
+        );
 
         await this.withRetry(
           `FinalizeSyncRound(${epoch})`,
           () => this.fabricClient.finalizeSyncRound(epoch),
-          { attempts: 20, initialDelayMs: 250 }
+          { attempts: 30, initialDelayMs: 250, reconnectOnConnectionError: true }
         );
         console.log(`[${this.clientId}] Finalized sync epoch ${epoch}`);
       } else {
         await this.withRetry(
           'SubmitLocalUpdateAsync',
           () => this.fabricClient.submitLocalUpdateAsync(collection, value, this.localData.sampleCount),
-          { attempts: 8, initialDelayMs: 200 }
+          { attempts: 8, initialDelayMs: 200, reconnectOnConnectionError: true }
         );
         console.log(`[${this.clientId}] Submitted ASYNC update`);
       }
+      return true;
     } catch (err) {
       const msg = this.getErrMessage(err);
       if (msg.includes('collection') && msg.includes('could not be found')) {
@@ -541,9 +672,10 @@ class FlClient {
           `[${this.clientId}] Failed to submit update: training PDC collections missing. ` +
             `Redeploy network with: ./deploy.sh --strategy vpsa`
         );
-        return;
+        return false;
       }
       console.error(`[${this.clientId}] Failed to submit update:`, err.message);
+      return false;
     }
   }
 
@@ -563,6 +695,13 @@ class FlClient {
           }
         } catch (err) {
           lastError = err;
+          if (this.isConnectionError(this.getErrMessage(err))) {
+            try {
+              await this.reconnectFabricClient();
+            } catch (reconnectErr) {
+              console.warn(`[${this.clientId}] Status reconnect failed: ${this.getErrMessage(reconnectErr)}`);
+            }
+          }
         }
 
         if (attempt < 12) {
@@ -594,7 +733,20 @@ class FlClient {
             continue;
           }
 
+          if (attempt < 10 && this.isRoundNotReady(msg)) {
+            console.log(`[${this.clientId}] Query attempt ${attempt} round not ready, retrying in 2s...`);
+            await this.sleep(2000);
+            continue;
+          }
+
           if (attempt < 10) {
+            if (this.isConnectionError(msg)) {
+              try {
+                await this.reconnectFabricClient();
+              } catch (reconnectErr) {
+                console.warn(`[${this.clientId}] Query reconnect failed: ${this.getErrMessage(reconnectErr)}`);
+              }
+            }
             await this.sleep(1500);
           }
         }
@@ -623,16 +775,28 @@ class FlClient {
 
     try {
       const parsed = JSON.parse(globalModel.modelData);
-      if (!Array.isArray(parsed) || parsed.length < 2) {
-        console.log(`[${this.clientId}] Global modelData format invalid, skip local update`);
-        return;
+      
+      if (this.dataset === 'simple' || this.dataset === 'linear') {
+        // Simple format: [w, b]
+        if (!Array.isArray(parsed) || parsed.length < 2) {
+          console.log(`[${this.clientId}] Global modelData format invalid, skip local update`);
+          return;
+        }
+        const [w, b] = parsed;
+        this.model.setWeights([
+          tf.tensor2d([w], [1, 1]),
+          tf.tensor1d([b]),
+        ]);
+        console.log(`[${this.clientId}] Updated local model from global: w=${w}, b=${b}`);
+      } else if (this.dataset === 'mnist') {
+        // CNN format: flattened 1D array, use dataLoader to unflatten
+        if (!Array.isArray(parsed)) {
+          console.log(`[${this.clientId}] Global modelData format invalid, expected array`);
+          return;
+        }
+        this.dataLoader.deserializeGlobalModel(parsed, this.model);
+        console.log(`[${this.clientId}] Updated CNN model from global (${parsed.length} params)`);
       }
-      const [w, b] = parsed;
-      this.model.setWeights([
-        tf.tensor2d([w], [1, 1]),
-        tf.tensor1d([b]),
-      ]);
-      console.log(`[${this.clientId}] Updated local model from global: w=${w}, b=${b}`);
     } catch (err) {
       console.log(`[${this.clientId}] Failed to parse global modelData: ${err.message}`);
     }
@@ -667,7 +831,7 @@ class FlClient {
 
   saveGlobalModelToFile(globalModel, round) {
     try {
-      const modelsDir = path.join(this.projectRoot, 'nodejs-client', 'models');
+      const modelsDir = path.join(this.projectRoot, 'nodejs-client', 'models', this.dataset);
       
       // Ensure models directory exists
       if (!fs.existsSync(modelsDir)) {
@@ -688,7 +852,7 @@ class FlClient {
       };
       
       fs.writeFileSync(filepath, JSON.stringify(modelToSave, null, 2));
-      console.log(`[${this.clientId}] Global model saved to ${filename}`);
+      console.log(`[${this.clientId}] Global model saved to models/${this.dataset}/${filename}`);
       
       // Also save as "latest" for easy access
       const latestPath = path.join(modelsDir, 'global-model-latest.json');
@@ -706,8 +870,12 @@ class FlClient {
       this.model.dispose();
     }
     if (this.localData) {
-      this.localData.xs.dispose();
-      this.localData.ys.dispose();
+      if (this.localData.xs && typeof this.localData.xs.dispose === 'function') {
+        this.localData.xs.dispose();
+      }
+      if (this.localData.ys && typeof this.localData.ys.dispose === 'function') {
+        this.localData.ys.dispose();
+      }
     }
     if (this.fabricClient) {
       await this.fabricClient.disconnect();
@@ -784,6 +952,11 @@ async function main() {
       default: 3,
       describe: 'Expected number of participating nodes in Org2',
     })
+    .option('dataset', {
+      type: 'string',
+      default: 'simple',
+      describe: 'Dataset to use: simple, linear, mnist',
+    })
     .parse();
 
   const client = new FlClient({
@@ -799,6 +972,7 @@ async function main() {
     mode: argv.mode,
     org1NodeCount: argv['org1-node-count'],
     org2NodeCount: argv['org2-node-count'],
+    dataset: argv.dataset,
   });
 
   try {
@@ -823,15 +997,18 @@ async function main() {
       await new Promise((r) => setTimeout(r, 1000));
 
       // Submit update to chain (use actual round number)
-      await client.submitUpdateToChain(currentRound);
+      const submitted = await client.submitUpdateToChain(currentRound);
+      if (!submitted) {
+        console.log(`[${client.clientId}] Stop training: failed to submit update for round ${currentRound}`);
+        break;
+      }
 
-      // Wait for aggregation and finalization
+      // Contract-signal flow: sync mode directly enters status-driven query path.
       if (argv.mode === 'sync') {
-        console.log(`[${client.clientId}] Waiting for sync aggregation and finalization...`);
-        // Give time for FinalizeSyncRound to execute and aggregate results
-        await new Promise((r) => setTimeout(r, 10000));
+        console.log(`[${client.clientId}] Waiting for on-chain ready signal...`);
       } else {
-        await new Promise((r) => setTimeout(r, 2000));
+        // Async mode keeps a short settle delay to avoid immediate hot polling.
+        await new Promise((r) => setTimeout(r, 500));
       }
 
       // Query and apply global model (use actual round number)
@@ -840,6 +1017,9 @@ async function main() {
         client.updateModelFromGlobal(globalModel);
         // Save global model to local file
         client.saveGlobalModelToFile(globalModel, currentRound);
+      } else {
+        console.log(`[${client.clientId}] Stop training: global model unavailable for round ${currentRound}`);
+        break;
       }
     }
 
