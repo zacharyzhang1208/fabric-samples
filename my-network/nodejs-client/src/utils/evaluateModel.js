@@ -7,8 +7,9 @@
  *   node src/utils/evaluateModel.js [dataset] [round|latest] [maxSamples]
  *
  * Examples:
+ *   node src/utils/evaluateModel.js
  *   node src/utils/evaluateModel.js linear latest
- *   node src/utils/evaluateModel.js simple 3
+ *   node src/utils/evaluateModel.js linear 3
  *   node src/utils/evaluateModel.js mnist latest 2000
  */
 
@@ -25,8 +26,9 @@ const { DataLoaderFactory, MNISTLoader } = require('../dataLoaders');
 const MNISTFileLoader = require('../mnistFileLoader');
 
 function parseArgs() {
-  const dataset = (process.argv[2] || 'simple').toLowerCase();
-  const roundArg = (process.argv[3] || 'latest').toLowerCase();
+  const datasetArg = process.argv[2] ? process.argv[2].toLowerCase() : null;
+  const dataset = datasetArg === 'all' ? null : datasetArg;
+  const roundArg = process.argv[3] ? process.argv[3].toLowerCase() : null;
   const maxSamplesArg = process.argv[4];
 
   const maxSamples = maxSamplesArg ? Number(maxSamplesArg) : undefined;
@@ -37,11 +39,57 @@ function parseArgs() {
   return { dataset, roundArg, maxSamples };
 }
 
-function resolveModelFile(dataset, roundArg) {
+function resolveDatasets(datasetArg) {
+  const available = DataLoaderFactory.getAvailable();
+
+  if (datasetArg) {
+    if (!available.includes(datasetArg)) {
+      throw new Error(
+        `Unsupported dataset: ${datasetArg}. Supported: ${available.join(', ')}`
+      );
+    }
+    return [datasetArg];
+  }
+
+  // No dataset argument: evaluate every dataset that has saved model rounds.
+  const modelRoot = path.join(__dirname, '..', '..', 'models');
+  const datasetsWithModels = available.filter((dataset) => {
+    const modelsDir = path.join(modelRoot, dataset);
+    if (!fs.existsSync(modelsDir)) return false;
+    return fs.readdirSync(modelsDir).some((f) => /^global-model-round-\d+\.json$/.test(f));
+  });
+
+  if (datasetsWithModels.length === 0) {
+    throw new Error(`No model rounds found under: ${modelRoot}`);
+  }
+
+  return datasetsWithModels;
+}
+
+function resolveModelFiles(dataset, roundArg) {
   const modelsDir = path.join(__dirname, '..', '..', 'models', dataset);
 
   if (!fs.existsSync(modelsDir)) {
     throw new Error(`Models directory not found: ${modelsDir}`);
+  }
+
+  // If round is omitted or explicitly set to "all", evaluate all saved rounds.
+  if (!roundArg || roundArg === 'all') {
+    const roundFiles = fs
+      .readdirSync(modelsDir)
+      .filter((f) => /^global-model-round-\d+\.json$/.test(f))
+      .sort((a, b) => {
+        const ra = Number(a.match(/\d+/)[0]);
+        const rb = Number(b.match(/\d+/)[0]);
+        return ra - rb;
+      })
+      .map((f) => path.join(modelsDir, f));
+
+    if (roundFiles.length === 0) {
+      throw new Error(`No round model files found in: ${modelsDir}`);
+    }
+
+    return roundFiles;
   }
 
   if (roundArg === 'latest') {
@@ -49,19 +97,19 @@ function resolveModelFile(dataset, roundArg) {
     if (!fs.existsSync(latestPath)) {
       throw new Error(`Latest model file not found: ${latestPath}`);
     }
-    return latestPath;
+    return [latestPath];
   }
 
   const round = Number(roundArg);
   if (!Number.isInteger(round) || round <= 0) {
-    throw new Error(`Invalid round: ${roundArg}. Use positive integer or 'latest'.`);
+    throw new Error(`Invalid round: ${roundArg}. Use positive integer, 'latest', or 'all'.`);
   }
 
   const roundPath = path.join(modelsDir, `global-model-round-${round}.json`);
   if (!fs.existsSync(roundPath)) {
     throw new Error(`Model file not found: ${roundPath}`);
   }
-  return roundPath;
+  return [roundPath];
 }
 
 function loadModelRecord(modelPath) {
@@ -118,19 +166,19 @@ function evaluateLinearDataset(modelWeights) {
     throw new Error('Linear model parameters are not finite numbers');
   }
 
-  const simpleDir = path.join(__dirname, '..', '..', 'data', 'simple');
-  if (!fs.existsSync(simpleDir)) {
+  const linearFitDir = path.join(__dirname, '..', '..', 'data', 'linear-fit');
+  if (!fs.existsSync(linearFitDir)) {
     throw new Error(
-      `Simple dataset directory not found: ${simpleDir}\n` +
-      'Please run: node src/utils/generateSimpleData.js'
+      `Linear fit dataset directory not found: ${linearFitDir}\n` +
+      'Please run: node src/utils/generateLinearFitData.js'
     );
   }
 
-  const files = fs.readdirSync(simpleDir).filter((f) => f.endsWith('.json'));
+  const files = fs.readdirSync(linearFitDir).filter((f) => f.endsWith('.json'));
   if (files.length === 0) {
     throw new Error(
-      `No simple data files found in: ${simpleDir}\n` +
-      'Please run: node src/utils/generateSimpleData.js'
+      `No linear fit data files found in: ${linearFitDir}\n` +
+      'Please run: node src/utils/generateLinearFitData.js'
     );
   }
 
@@ -139,7 +187,7 @@ function evaluateLinearDataset(modelWeights) {
   const allYs = [];
 
   for (const file of files) {
-    const fullPath = path.join(simpleDir, file);
+    const fullPath = path.join(linearFitDir, file);
     const raw = fs.readFileSync(fullPath, 'utf8');
     const data = JSON.parse(raw);
     const xs = data.xs || [];
@@ -160,7 +208,7 @@ function evaluateLinearDataset(modelWeights) {
   }
 
   if (allXs.length === 0) {
-    throw new Error('No valid simple samples found for evaluation');
+    throw new Error('No valid linear fit samples found for evaluation');
   }
 
   const overall = computeLinearMetrics(allXs, allYs, w, b);
@@ -226,13 +274,14 @@ async function evaluateMnistDataset(modelWeights, maxSamples) {
 }
 
 function saveEvaluationResult(dataset, modelPath, modelRecord, result) {
-  const reportsDir = path.join(__dirname, '..', '..', 'reports', 'evaluations');
+  const reportsRoot = path.join(__dirname, '..', '..', 'reports', 'evaluations');
+  const reportsDir = path.join(reportsRoot, dataset);
   if (!fs.existsSync(reportsDir)) {
     fs.mkdirSync(reportsDir, { recursive: true });
   }
 
   const roundPart = modelRecord.round ? `round-${modelRecord.round}` : 'latest';
-  const outputPath = path.join(reportsDir, `evaluation-${dataset}-${roundPart}.json`);
+  const outputPath = path.join(reportsDir, `evaluation-${roundPart}.json`);
 
   const payload = {
     dataset,
@@ -248,38 +297,47 @@ function saveEvaluationResult(dataset, modelPath, modelRecord, result) {
 
 async function main() {
   const { dataset, roundArg, maxSamples } = parseArgs();
+  const evaluatingAllRounds = !roundArg || roundArg === 'all';
 
-  if (!DataLoaderFactory.getAvailable().includes(dataset)) {
-    throw new Error(
-      `Unsupported dataset: ${dataset}. Supported: ${DataLoaderFactory.getAvailable().join(', ')}`
-    );
+  const datasets = resolveDatasets(dataset);
+  if (!dataset) {
+    console.log(`No dataset argument provided, evaluating all datasets with model rounds: ${datasets.join(', ')}`);
   }
 
-  const modelPath = resolveModelFile(dataset, roundArg);
-  const modelRecord = loadModelRecord(modelPath);
-  const modelWeights = JSON.parse(modelRecord.modelData);
+  for (const currentDataset of datasets) {
+    const modelPaths = resolveModelFiles(currentDataset, roundArg);
 
-  console.log(`Evaluating dataset: ${dataset}`);
-  console.log(`Model file: ${modelPath}`);
+    console.log(`Evaluating dataset: ${currentDataset}`);
+    if (evaluatingAllRounds) {
+      console.log(`Mode: all rounds (${modelPaths.length} files)`);
+    }
 
-  let result;
-  if (dataset === 'mnist') {
-    result = await evaluateMnistDataset(modelWeights, maxSamples);
-    console.log(
-      `MNIST metrics -> loss=${result.overall.loss.toFixed(6)}, ` +
-      `accuracy=${(result.overall.accuracy * 100).toFixed(2)}%, samples=${result.overall.sampleCount}`
-    );
-  } else {
-    result = evaluateLinearDataset(modelWeights);
-    console.log(
-      `Linear metrics -> MSE=${result.overall.mse.toFixed(6)}, ` +
-      `MAE=${result.overall.mae.toFixed(6)}, R2=${result.overall.r2.toFixed(6)}, ` +
-      `samples=${result.overall.sampleCount}`
-    );
+    for (const modelPath of modelPaths) {
+      const modelRecord = loadModelRecord(modelPath);
+      const modelWeights = JSON.parse(modelRecord.modelData);
+
+      console.log(`Model file: ${modelPath}`);
+
+      let result;
+      if (currentDataset === 'mnist') {
+        result = await evaluateMnistDataset(modelWeights, maxSamples);
+        console.log(
+          `MNIST metrics -> loss=${result.overall.loss.toFixed(6)}, ` +
+          `accuracy=${(result.overall.accuracy * 100).toFixed(2)}%, samples=${result.overall.sampleCount}`
+        );
+      } else {
+        result = evaluateLinearDataset(modelWeights);
+        console.log(
+          `Linear metrics -> MSE=${result.overall.mse.toFixed(6)}, ` +
+          `MAE=${result.overall.mae.toFixed(6)}, R2=${result.overall.r2.toFixed(6)}, ` +
+          `samples=${result.overall.sampleCount}`
+        );
+      }
+
+      const outputPath = saveEvaluationResult(currentDataset, modelPath, modelRecord, result);
+      console.log(`Evaluation saved: ${outputPath}`);
+    }
   }
-
-  const outputPath = saveEvaluationResult(dataset, modelPath, modelRecord, result);
-  console.log(`Evaluation saved: ${outputPath}`);
 }
 
 main().catch((err) => {

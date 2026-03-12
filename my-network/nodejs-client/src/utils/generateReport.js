@@ -3,7 +3,7 @@
 /**
  * Generate FL Training Report from saved global models.
  * Supports:
- *   - 'regression'     datasets (simple, linear): shows weight & bias evolution
+ *   - 'regression'     datasets (linear): shows weight & bias evolution
  *   - 'classification' datasets (mnist, ...):    shows accuracy & loss from evaluation JSONs
  *
  * To add a new dataset, register it in DATASET_TYPES below.
@@ -11,28 +11,27 @@
  * Usage:
  *   node src/utils/generateReport.js [dataset]
  *   node src/utils/generateReport.js mnist
- *   node src/utils/generateReport.js simple
+ *   node src/utils/generateReport.js linear
  */
 
 const fs = require('fs');
 const path = require('path');
 
-const DATASET = (process.argv[2] || process.env.FL_DATASET || 'simple').toLowerCase();
+const DATASET = (process.argv[2] || process.env.FL_DATASET || 'linear').toLowerCase();
 
 // Map each known dataset name to its task type.
 // 'regression'     → stores scalar [w, b] in modelData; no external evaluation files needed.
 // 'classification' → stores full CNN weights; reads per-round evaluation JSONs for accuracy/loss.
 const DATASET_TYPES = {
-  simple: 'regression',
   linear: 'regression',
   mnist:  'classification',
 };
 const TYPE = DATASET_TYPES[DATASET] || 'classification';
 
-const MODELS_DIR = path.join(__dirname, '..', '..', 'models', DATASET);
 const EVALS_DIR  = path.join(__dirname, '..', '..', 'reports', 'evaluations');
 const REPORTS_DIR = path.join(__dirname, '..', '..', 'reports');
 const OUTPUT_FILE = path.join(REPORTS_DIR, `fl-training-report-${DATASET}.html`);
+const MODELS_DIR = path.join(__dirname, '..', '..', 'models', DATASET);
 
 // ── Data loading ──────────────────────────────────────────────────────────────
 
@@ -81,15 +80,28 @@ function extractParticipation(models) {
 
 /**
  * Load evaluation result files produced by evaluateModel.js.
- * Pattern: reports/evaluations/evaluation-<dataset>-round-<n>.json
+ * Preferred pattern: reports/evaluations/<dataset>/evaluation-round-<n>.json
+ * Legacy pattern:    reports/evaluations/evaluation-<dataset>-round-<n>.json
  */
 function loadEvaluations() {
   if (!fs.existsSync(EVALS_DIR)) return [];
-  const pattern = new RegExp(`^evaluation-${DATASET}-round-(\\d+)\\.json$`);
+  const datasetEvalDir = path.join(EVALS_DIR, DATASET);
+  const patternNew = /^evaluation-round-(\d+)\.json$/;
+  const patternLegacy = new RegExp(`^evaluation-${DATASET}-round-(\\d+)\\.json$`);
   const evals = [];
 
+  if (fs.existsSync(datasetEvalDir)) {
+    for (const file of fs.readdirSync(datasetEvalDir)) {
+      if (!patternNew.test(file)) continue;
+      try {
+        evals.push(JSON.parse(fs.readFileSync(path.join(datasetEvalDir, file), 'utf8')));
+      } catch (_) { /* skip malformed files */ }
+    }
+  }
+
+  // Backward compatibility for existing flat evaluation files.
   for (const file of fs.readdirSync(EVALS_DIR)) {
-    if (!pattern.test(file)) continue;
+    if (!patternLegacy.test(file)) continue;
     try {
       evals.push(JSON.parse(fs.readFileSync(path.join(EVALS_DIR, file), 'utf8')));
     } catch (_) { /* skip malformed files */ }
@@ -194,29 +206,61 @@ function generateHTMLReport(models, evals) {
   const participation = extractParticipation(models);
 
   return TYPE === 'regression'
-    ? generateLinearHTML(models, latestModel, participation, datasetLabel)
+    ? generateLinearHTML(models, latestModel, participation, evals, datasetLabel)
     : generateClassificationHTML(models, latestModel, participation, evals, datasetLabel);
 }
 
 // ── Linear report ─────────────────────────────────────────────────────────────
 
-function generateLinearHTML(models, latestModel, participation, datasetLabel) {
+function generateLinearHTML(models, latestModel, participation, evals, datasetLabel) {
   const data = extractLinearParams(models);
+  const evalByRound = {};
+  for (const e of evals) {
+    evalByRound[e.round] = e.result && e.result.overall ? e.result.overall : null;
+  }
+
+  const latestEval = evals.length > 0 ? evals[evals.length - 1] : null;
+  const latestMetrics = latestEval && latestEval.result && latestEval.result.overall
+    ? latestEval.result.overall : null;
+  const hasEvals = evals.length > 0;
+  const evalRounds = evals.map((e) => e.round);
+  const evalMse = evals.map((e) => e.result && e.result.overall ? +e.result.overall.mse.toFixed(6) : null);
+  const evalMae = evals.map((e) => e.result && e.result.overall ? +e.result.overall.mae.toFixed(6) : null);
+  const evalR2 = evals.map((e) => e.result && e.result.overall ? +e.result.overall.r2.toFixed(6) : null);
 
   const tableRows = models.map(m => {
     const params = JSON.parse(m.modelData);
     const ts = m.timestamp ? new Date(m.timestamp * 1000).toLocaleString() : 'N/A';
     const pInfo = m.participants && m.participants.length > 0
       ? m.participants.join(', ') : (m.participantCount || 'N/A');
+    const ev = evalByRound[m.round];
     return `          <tr>
             <td>${m.round}</td>
             <td>${params[0].toFixed(6)}</td>
             <td>${params[1].toFixed(6)}</td>
+            <td>${ev ? ev.mse.toFixed(6) : '—'}</td>
+            <td>${ev ? ev.mae.toFixed(6) : '—'}</td>
+            <td>${ev ? ev.r2.toFixed(6) : '—'}</td>
             <td>${pInfo}</td>
             <td>${m.totalSamples || 'N/A'}</td>
             <td>${ts}</td>
           </tr>`;
   }).join('\n');
+
+  const evalNote = hasEvals
+    ? `Evaluation data available for ${evals.length} round(s): ${evalRounds.join(', ')}.
+       Run <code>node src/utils/evaluateModel.js ${DATASET} &lt;round&gt;</code> to add more.`
+    : `No evaluation data found. Run <code>node src/utils/evaluateModel.js ${DATASET} latest</code> to generate MSE/MAE/R2 metrics.`;
+
+  const evalChartBlock = hasEvals ? `
+    <div class="card">
+      <h2>🎯 Regression Metrics (Evaluated Rounds)</h2>
+      <div class="chart-container"><canvas id="metricsChart"></canvas></div>
+    </div>` : `
+    <div class="card">
+      <h2>🎯 Regression Metrics</h2>
+      <p class="note">${evalNote}</p>
+    </div>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -243,8 +287,14 @@ function generateLinearHTML(models, latestModel, participation, datasetLabel) {
       <h2>📊 Training Summary</h2>
       <div class="summary-grid">
         <div class="stat"><div class="stat-label">Total Rounds</div><div class="stat-value">${models.length}</div></div>
+        <div class="stat"><div class="stat-label">Evaluated Rounds</div><div class="stat-value">${evals.length}</div></div>
         <div class="stat"><div class="stat-label">Latest Weight (w)</div><div class="stat-value">${data.weights[data.weights.length - 1].toFixed(4)}</div></div>
         <div class="stat"><div class="stat-label">Latest Bias (b)</div><div class="stat-value">${data.biases[data.biases.length - 1].toFixed(4)}</div></div>
+        ${latestMetrics ? `
+        <div class="stat"><div class="stat-label">Latest MSE (Rd ${latestEval.round})</div><div class="stat-value">${latestMetrics.mse.toFixed(4)}</div></div>
+        <div class="stat"><div class="stat-label">Latest MAE (Rd ${latestEval.round})</div><div class="stat-value">${latestMetrics.mae.toFixed(4)}</div></div>
+        <div class="stat"><div class="stat-label">Latest R² (Rd ${latestEval.round})</div><div class="stat-value" style="color:var(--primary)">${latestMetrics.r2.toFixed(4)}</div></div>
+        <div class="stat"><div class="stat-label">Eval Sample Size</div><div class="stat-value">${latestMetrics.sampleCount || 'N/A'}</div></div>` : ''}
         <div class="stat"><div class="stat-label">Participants</div><div class="stat-value">${latestModel.participantCount || latestModel.participants?.length || 'N/A'}</div></div>
         <div class="stat"><div class="stat-label">Total Samples</div><div class="stat-value">${latestModel.totalSamples || 'N/A'}</div></div>
         ${latestModel.participants && latestModel.participants.length > 0 ? `
@@ -254,6 +304,8 @@ function generateLinearHTML(models, latestModel, participation, datasetLabel) {
         </div>` : ''}
       </div>
     </div>
+
+    ${evalChartBlock}
 
     <div class="card">
       <h2>📈 Model Parameters Evolution</h2>
@@ -267,8 +319,9 @@ function generateLinearHTML(models, latestModel, participation, datasetLabel) {
 
     <div class="card">
       <h2>📋 Detailed Round History</h2>
+      ${!hasEvals ? `<p class="note" style="margin-bottom:12px">${evalNote}</p>` : ''}
       <table>
-        <thead><tr><th>Round</th><th>Weight (w)</th><th>Bias (b)</th><th>Participants</th><th>Total Samples</th><th>Timestamp</th></tr></thead>
+        <thead><tr><th>Round</th><th>Weight (w)</th><th>Bias (b)</th><th>MSE</th><th>MAE</th><th>R²</th><th>Participants</th><th>Total Samples</th><th>Timestamp</th></tr></thead>
         <tbody>${tableRows}</tbody>
       </table>
     </div>
@@ -280,6 +333,33 @@ function generateLinearHTML(models, latestModel, participation, datasetLabel) {
       red:  'rgba(255,107,107,1)', blue:  'rgba(159,176,217,1)',
       grid: 'rgba(255,255,255,0.08)'
     };
+
+    ${hasEvals ? `
+    new Chart(document.getElementById('metricsChart'), {
+      type: 'line',
+      data: {
+        labels: ${JSON.stringify(evalRounds)},
+        datasets: [
+          { label: 'MSE', data: ${JSON.stringify(evalMse)},
+            borderColor: C.red, backgroundColor: 'rgba(255,107,107,0.08)', tension: 0.3, fill: false, yAxisID: 'yErr' },
+          { label: 'MAE', data: ${JSON.stringify(evalMae)},
+            borderColor: C.yellow, backgroundColor: 'rgba(255,209,102,0.08)', tension: 0.3, fill: false, yAxisID: 'yErr' },
+          { label: 'R²', data: ${JSON.stringify(evalR2)},
+            borderColor: C.teal, backgroundColor: 'rgba(78,205,196,0.12)', tension: 0.3, fill: false, yAxisID: 'yR2' }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#eaf0ff' } } },
+        scales: {
+          x: { title: { display: true, text: 'Round', color: '#9fb0d9' }, grid: { color: C.grid }, ticks: { color: '#9fb0d9' } },
+          yErr: { type: 'linear', position: 'left',
+            title: { display: true, text: 'Error', color: '#9fb0d9' }, grid: { color: C.grid }, ticks: { color: '#9fb0d9' }, min: 0 },
+          yR2: { type: 'linear', position: 'right',
+            title: { display: true, text: 'R²', color: '#9fb0d9' }, grid: { display: false }, ticks: { color: '#9fb0d9' }, min: 0, max: 1 }
+        }
+      }
+    });` : '/* no regression evaluation data */'}
 
     new Chart(document.getElementById('paramsChart'), {
       type: 'line',

@@ -61,7 +61,7 @@ const CLIENTS = [
   },
 ];
 
-function launchClient(config, epochs, mode, dataset = 'simple', mnistSamples = 20000) {
+function launchClient(config, epochs, mode, dataset = 'linear', mnistSamples = 20000) {
   const org1NodeCount = CLIENTS.filter((c) => c.orgMspId === 'Org1MSP').length;
   const org2NodeCount = CLIENTS.filter((c) => c.orgMspId === 'Org2MSP').length;
 
@@ -112,7 +112,7 @@ function launchClient(config, epochs, mode, dataset = 'simple', mnistSamples = 2
 async function main() {
   const epochs = process.argv[2] ? Number(process.argv[2]) : 10;
   const mode = process.argv[3] || 'sync';
-  const dataset = process.argv[4] || 'simple';
+  const dataset = process.argv[4] || 'linear';
   const mnistSamples = process.argv[5] ? Number(process.argv[5]) : 20000;
 
   console.log(`[LAUNCHER] Starting ${CLIENTS.length} FL clients`);
@@ -122,7 +122,7 @@ async function main() {
     console.log(`[LAUNCHER] MNIST samples: ${mnistSamples}`);
   }
   console.log(`[LAUNCHER] Usage: node launchClients.js [epochs] [mode] [dataset] [mnistSamples]`);
-  console.log(`[LAUNCHER] Example: node launchClients.js 10 sync mnist 60000\n`);
+  console.log(`[LAUNCHER] Example: node launchClients.js 10 sync linear\n`);
   
   const { DataLoaderFactory } = require('./dataLoaders');
   const availableDatasets = DataLoaderFactory.getAvailable();

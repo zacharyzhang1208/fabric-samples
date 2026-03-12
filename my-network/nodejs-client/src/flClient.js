@@ -311,7 +311,7 @@ class FlClient {
     this.projectRoot = options.projectRoot;
     this.org1NodeCount = options.org1NodeCount || 2;
     this.org2NodeCount = options.org2NodeCount || 3;
-    this.dataset = options.dataset || 'simple';
+    this.dataset = options.dataset || 'linear';
     this.mnistSamples = options.mnistSamples || 20000;
     
     this.FabricClient = buildClientFabricClient({
@@ -363,7 +363,7 @@ class FlClient {
       nodeIndex: globalNodeIndex,
     });
     
-    if (this.dataset === 'simple' || this.dataset === 'linear') {
+    if (this.dataset === 'linear') {
       this.localData = await this.dataLoader.load();
       console.log(`[${this.clientId}] Generated local dataset: ${this.localData.sampleCount} samples`);
     } else if (this.dataset === 'mnist') {
@@ -548,7 +548,7 @@ class FlClient {
   async trainOneEpoch() {
     console.log(`[${this.clientId}] Training for 1 epoch...`);
     
-    if (this.dataset === 'simple' || this.dataset === 'linear') {
+    if (this.dataset === 'linear') {
       const xs = tf.reshape(this.localData.xs, [-1, 1]);
       await this.model.fit(xs, this.localData.ys, {
         epochs: 1,
@@ -584,7 +584,7 @@ class FlClient {
   }
 
   getLocalModelUpdate() {
-    if (this.dataset === 'simple' || this.dataset === 'linear') {
+    if (this.dataset === 'linear') {
       const weights = this.model.getWeights();
       const w = weights[0].dataSync()[0]; // weight parameter
       const b = weights[1].dataSync()[0]; // bias parameter
@@ -787,8 +787,8 @@ class FlClient {
       const parsed = JSON.parse(globalModel.modelData);
       const refreshedModel = this.dataLoader.buildModel();
       
-      if (this.dataset === 'simple' || this.dataset === 'linear') {
-        // Simple format: [w, b]
+      if (this.dataset === 'linear') {
+        // Linear format: [w, b]
         if (!Array.isArray(parsed) || parsed.length < 2) {
           console.log(`[${this.clientId}] Global modelData format invalid, skip local update`);
           refreshedModel.dispose();
@@ -972,8 +972,8 @@ async function main() {
     })
     .option('dataset', {
       type: 'string',
-      default: 'simple',
-      describe: 'Dataset to use: simple, linear, mnist',
+      default: 'linear',
+      describe: 'Dataset to use: linear, mnist',
     })
     .option('mnist-samples', {
       type: 'number',

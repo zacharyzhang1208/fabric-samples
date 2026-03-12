@@ -1,6 +1,6 @@
 /**
  * Pluggable Data Loaders Framework
- * Supports different datasets: simple, mnist
+ * Supports different datasets: linear, mnist
  * Each loader implements: load(), buildModel(), serialize/deserialize methods
  */
 
@@ -37,22 +37,22 @@ class DataLoader {
 }
 
 /**
- * Simple Linear Regression Loader
- * Loads pre-generated data from src/utils/generateSimpleData.js
+ * Linear Regression Loader
+ * Loads pre-generated data from src/utils/generateLinearFitData.js
  */
-class SimpleLinearLoader extends DataLoader {
+class LinearRegressionLoader extends DataLoader {
   constructor(clientId) {
     super();
     this.clientId = clientId;
   }
 
   async load() {
-    const dataPath = path.join(__dirname, '..', 'data', 'simple', `${this.clientId}.json`);
+    const dataPath = path.join(__dirname, '..', 'data', 'linear-fit', `${this.clientId}.json`);
     
     if (!fs.existsSync(dataPath)) {
       throw new Error(
-        `Simple dataset file missing: ${this.clientId}.json\n` +
-        `Please run: node src/utils/generateSimpleData.js`
+        `Linear fit dataset file missing: ${this.clientId}.json\n` +
+        `Please run: node src/utils/generateLinearFitData.js`
       );
     }
     
@@ -60,7 +60,7 @@ class SimpleLinearLoader extends DataLoader {
     const data = JSON.parse(raw);
     
     if (!Array.isArray(data.xs) || !Array.isArray(data.ys)) {
-      throw new Error(`Invalid simple dataset format: ${dataPath}`);
+      throw new Error(`Invalid linear fit dataset format: ${dataPath}`);
     }
 
     return {
@@ -231,9 +231,8 @@ class MNISTLoader extends DataLoader {
 class DataLoaderFactory {
   static create(datasetName, clientId = 'A-N1', options = {}) {
     switch (datasetName) {
-      case 'simple':
       case 'linear':
-        return new SimpleLinearLoader(clientId);
+        return new LinearRegressionLoader(clientId);
       case 'mnist':
         return new MNISTLoader(clientId, options);
       default:
@@ -242,13 +241,13 @@ class DataLoaderFactory {
   }
 
   static getAvailable() {
-    return ['simple', 'linear', 'mnist'];
+    return ['linear', 'mnist'];
   }
 }
 
 module.exports = {
   DataLoader,
-  SimpleLinearLoader,
+  LinearRegressionLoader,
   MNISTLoader,
   DataLoaderFactory,
 };
