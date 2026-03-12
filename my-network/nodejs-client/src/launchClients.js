@@ -61,7 +61,7 @@ const CLIENTS = [
   },
 ];
 
-function launchClient(config, epochs, mode, dataset = 'simple') {
+function launchClient(config, epochs, mode, dataset = 'simple', mnistSamples = 20000) {
   const org1NodeCount = CLIENTS.filter((c) => c.orgMspId === 'Org1MSP').length;
   const org2NodeCount = CLIENTS.filter((c) => c.orgMspId === 'Org2MSP').length;
 
@@ -79,6 +79,7 @@ function launchClient(config, epochs, mode, dataset = 'simple') {
     '--epochs', String(epochs),
     '--mode', mode,
     '--dataset', dataset,
+    '--mnist-samples', String(mnistSamples),
   ];
 
   const clientId = `${config.org}-N${config.node}`;
@@ -112,12 +113,16 @@ async function main() {
   const epochs = process.argv[2] ? Number(process.argv[2]) : 10;
   const mode = process.argv[3] || 'sync';
   const dataset = process.argv[4] || 'simple';
+  const mnistSamples = process.argv[5] ? Number(process.argv[5]) : 20000;
 
   console.log(`[LAUNCHER] Starting ${CLIENTS.length} FL clients`);
   console.log(`[LAUNCHER] Topology: Bank A (Org1) - 2 nodes, Bank B (Org2) - 3 nodes`);
   console.log(`[LAUNCHER] Configuration: epochs=${epochs}, mode=${mode}, dataset=${dataset}`);
-  console.log(`[LAUNCHER] Usage: node launchClients.js [epochs] [mode] [dataset]`);
-  console.log(`[LAUNCHER] Example: node launchClients.js 10 sync mnist\n`);
+  if (dataset === 'mnist') {
+    console.log(`[LAUNCHER] MNIST samples: ${mnistSamples}`);
+  }
+  console.log(`[LAUNCHER] Usage: node launchClients.js [epochs] [mode] [dataset] [mnistSamples]`);
+  console.log(`[LAUNCHER] Example: node launchClients.js 10 sync mnist 60000\n`);
   
   const { DataLoaderFactory } = require('./dataLoaders');
   const availableDatasets = DataLoaderFactory.getAvailable();
@@ -155,7 +160,7 @@ async function main() {
     process.exit(1);
   }
 
-  const processes = CLIENTS.map((config) => launchClient(config, epochs, mode, dataset));
+  const processes = CLIENTS.map((config) => launchClient(config, epochs, mode, dataset, mnistSamples));
 
   // Wait for all processes to complete
   await Promise.all(

@@ -6,6 +6,12 @@
 
 const fs = require('fs');
 const path = require('path');
+
+// Suppress TensorFlow C++ INFO logs (oneDNN/CPU feature banners).
+if (!process.env.TF_CPP_MIN_LOG_LEVEL) {
+  process.env.TF_CPP_MIN_LOG_LEVEL = '2';
+}
+
 const tf = require('@tensorflow/tfjs-node');
 const MNISTFileLoader = require('./mnistFileLoader');
 
@@ -102,22 +108,32 @@ class SimpleLinearLoader extends DataLoader {
  * Requires pre-downloaded MNIST data via src/utils/downloadMNIST.js
  */
 class MNISTLoader extends DataLoader {
-  constructor(clientId) {
+  constructor(clientId, options = {}) {
     super();
     this.clientId = clientId;
+    this.trainSamples = Number.isInteger(options.trainSamples) && options.trainSamples > 0
+      ? options.trainSamples
+      : 20000;
+    this.totalNodes = Number.isInteger(options.totalNodes) && options.totalNodes > 0
+      ? options.totalNodes
+      : 5;
+    this.nodeIndex = Number.isInteger(options.nodeIndex) && options.nodeIndex >= 0
+      ? options.nodeIndex
+      : null;
   }
 
   async load() {
     const mnistLoader = new MNISTFileLoader();
     
     console.log(`[${this.clientId}] Loading MNIST dataset...`);
-    const { images, labels } = await mnistLoader.loadTrainingData(8000);
+    const { images, labels } = await mnistLoader.loadTrainingData(this.trainSamples);
 
-    // Partition based on node ID (simple data heterogeneity)
-    const nodeIndex = parseInt(this.clientId.split('-N')[1]) - 1;
-    const samplesPerNode = Math.floor(images.length / 5);
+    // Partition based on a global node index so org-local node IDs do not overlap.
+    const fallbackNodeIndex = parseInt(this.clientId.split('-N')[1], 10) - 1;
+    const nodeIndex = this.nodeIndex !== null ? this.nodeIndex : fallbackNodeIndex;
+    const samplesPerNode = Math.floor(images.length / this.totalNodes);
     const startIdx = nodeIndex * samplesPerNode;
-    const endIdx = nodeIndex === 4 ? images.length : (nodeIndex + 1) * samplesPerNode;
+    const endIdx = nodeIndex === this.totalNodes - 1 ? images.length : (nodeIndex + 1) * samplesPerNode;
 
     const nodeImages = images.slice(startIdx, endIdx);
     const nodeLabels = labels.slice(startIdx, endIdx);
@@ -213,13 +229,13 @@ class MNISTLoader extends DataLoader {
  * Data Loader Factory
  */
 class DataLoaderFactory {
-  static create(datasetName, clientId = 'A-N1') {
+  static create(datasetName, clientId = 'A-N1', options = {}) {
     switch (datasetName) {
       case 'simple':
       case 'linear':
         return new SimpleLinearLoader(clientId);
       case 'mnist':
-        return new MNISTLoader(clientId);
+        return new MNISTLoader(clientId, options);
       default:
         throw new Error(`Unknown dataset: ${datasetName}`);
     }

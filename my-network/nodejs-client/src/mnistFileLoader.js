@@ -8,6 +8,12 @@
 
 const fs = require('fs');
 const path = require('path');
+
+// Suppress TensorFlow C++ INFO logs (oneDNN/CPU feature banners).
+if (!process.env.TF_CPP_MIN_LOG_LEVEL) {
+  process.env.TF_CPP_MIN_LOG_LEVEL = '2';
+}
+
 const tf = require('@tensorflow/tfjs-node');
 
 class MNISTFileLoader {

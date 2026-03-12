@@ -446,7 +446,6 @@ function main() {
     console.warn('⚠️  No global model files found. Run training first.');
   }
   
-  console.log('📊 Generating HTML report...');
   const html = generateHTMLReport(models);
   
   // Ensure reports directory exists

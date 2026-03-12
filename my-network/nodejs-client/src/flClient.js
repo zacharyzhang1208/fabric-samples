@@ -312,6 +312,7 @@ class FlClient {
     this.org1NodeCount = options.org1NodeCount || 2;
     this.org2NodeCount = options.org2NodeCount || 3;
     this.dataset = options.dataset || 'simple';
+    this.mnistSamples = options.mnistSamples || 20000;
     
     this.FabricClient = buildClientFabricClient({
       orgDomain: this.orgDomain,
@@ -350,8 +351,17 @@ class FlClient {
   }
 
   async generateLocalDataset() {
+    const globalNodeIndex =
+      this.orgMspId === 'Org1MSP'
+        ? this.nodeId - 1
+        : this.org1NodeCount + this.nodeId - 1;
+
     const { DataLoaderFactory } = require('./dataLoaders');
-    this.dataLoader = DataLoaderFactory.create(this.dataset, this.clientId);
+    this.dataLoader = DataLoaderFactory.create(this.dataset, this.clientId, {
+      trainSamples: this.mnistSamples,
+      totalNodes: this.org1NodeCount + this.org2NodeCount,
+      nodeIndex: globalNodeIndex,
+    });
     
     if (this.dataset === 'simple' || this.dataset === 'linear') {
       this.localData = await this.dataLoader.load();
@@ -957,6 +967,11 @@ async function main() {
       default: 'simple',
       describe: 'Dataset to use: simple, linear, mnist',
     })
+    .option('mnist-samples', {
+      type: 'number',
+      default: 20000,
+      describe: 'Total MNIST training samples to load before partitioning',
+    })
     .parse();
 
   const client = new FlClient({
@@ -973,6 +988,7 @@ async function main() {
     org1NodeCount: argv['org1-node-count'],
     org2NodeCount: argv['org2-node-count'],
     dataset: argv.dataset,
+    mnistSamples: argv['mnist-samples'],
   });
 
   try {
