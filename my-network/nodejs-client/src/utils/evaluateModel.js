@@ -244,6 +244,7 @@ async function evaluateMnistDataset(modelWeights, maxSamples) {
     const xs = tf.tensor4d(imageData, [images.length, 28, 28, 1]);
     const ys = tf.tensor2d(labels);
 
+    // 1. Standard metrics (loss + accuracy)
     const evalResult = model.evaluate(xs, ys, { batchSize: 64, verbose: 0 });
 
     let loss;
@@ -257,6 +258,46 @@ async function evaluateMnistDataset(modelWeights, maxSamples) {
       evalResult.dispose();
     }
 
+    // 2. Per-class Precision / Recall / F1
+    const NUM_CLASSES = 10;
+    const predsTensor = model.predict(xs);
+    const predLabels = tf.argMax(predsTensor, 1).dataSync();
+    const trueLabels = tf.argMax(ys, 1).dataSync();
+    predsTensor.dispose();
+
+    const tp = new Array(NUM_CLASSES).fill(0);
+    const fp = new Array(NUM_CLASSES).fill(0);
+    const fn = new Array(NUM_CLASSES).fill(0);
+    for (let i = 0; i < trueLabels.length; i++) {
+      const pred = predLabels[i];
+      const true_ = trueLabels[i];
+      if (pred === true_) {
+        tp[true_]++;
+      } else {
+        fp[pred]++;
+        fn[true_]++;
+      }
+    }
+
+    const perClass = [];
+    let macroP = 0;
+    let macroR = 0;
+    let macroF1 = 0;
+    for (let c = 0; c < NUM_CLASSES; c++) {
+      const precision = tp[c] + fp[c] > 0 ? tp[c] / (tp[c] + fp[c]) : 0;
+      const recall    = tp[c] + fn[c] > 0 ? tp[c] / (tp[c] + fn[c]) : 0;
+      const f1        = precision + recall > 0 ? 2 * precision * recall / (precision + recall) : 0;
+      perClass.push({ class: c, precision, recall, f1, support: tp[c] + fn[c] });
+      macroP  += precision;
+      macroR  += recall;
+      macroF1 += f1;
+    }
+    const macroAvg = {
+      precision: macroP  / NUM_CLASSES,
+      recall:    macroR  / NUM_CLASSES,
+      f1:        macroF1 / NUM_CLASSES,
+    };
+
     xs.dispose();
     ys.dispose();
 
@@ -266,7 +307,10 @@ async function evaluateMnistDataset(modelWeights, maxSamples) {
         loss,
         accuracy: acc,
         sampleCount: images.length,
+        ...macroAvg,
       },
+      macroAvg,
+      perClass,
     };
   } finally {
     model.dispose();
@@ -323,7 +367,13 @@ async function main() {
         result = await evaluateMnistDataset(modelWeights, maxSamples);
         console.log(
           `MNIST metrics -> loss=${result.overall.loss.toFixed(6)}, ` +
-          `accuracy=${(result.overall.accuracy * 100).toFixed(2)}%, samples=${result.overall.sampleCount}`
+          `accuracy=${(result.overall.accuracy * 100).toFixed(2)}%` +
+          (result.overall.f1 !== undefined
+            ? `, precision=${(result.overall.precision * 100).toFixed(2)}%` +
+              `, recall=${(result.overall.recall * 100).toFixed(2)}%` +
+              `, F1=${(result.overall.f1 * 100).toFixed(2)}%`
+            : '') +
+          `, samples=${result.overall.sampleCount}`
         );
       } else {
         result = evaluateLinearDataset(modelWeights);

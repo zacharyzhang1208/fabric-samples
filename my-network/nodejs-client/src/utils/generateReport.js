@@ -429,6 +429,17 @@ function generateClassificationHTML(models, latestModel, participation, evals, d
   const evalAccuracy  = evals.map(e => e.result && e.result.overall ? +(e.result.overall.accuracy * 100).toFixed(2) : null);
   const evalLoss      = evals.map(e => e.result && e.result.overall ? +e.result.overall.loss.toFixed(6)             : null);
 
+  // Data for Precision / Recall / F1 chart (rounds that have extended metrics)
+  const hasF1Data     = evals.some(e => e.result && e.result.overall && e.result.overall.f1 !== undefined);
+  const evalPrecision = evals.map(e => e.result && e.result.overall && e.result.overall.precision !== undefined
+    ? +(e.result.overall.precision * 100).toFixed(2) : null);
+  const evalRecall    = evals.map(e => e.result && e.result.overall && e.result.overall.recall !== undefined
+    ? +(e.result.overall.recall * 100).toFixed(2) : null);
+  const evalF1        = evals.map(e => e.result && e.result.overall && e.result.overall.f1 !== undefined
+    ? +(e.result.overall.f1 * 100).toFixed(2) : null);
+  const latestPerClass = latestEval && latestEval.result && latestEval.result.perClass
+    ? latestEval.result.perClass : null;
+
   // Per-round table rows (all training rounds; merge eval data where available)
   const tableRows = models.map(m => {
     const ts    = m.timestamp ? new Date(m.timestamp * 1000).toLocaleString() : 'N/A';
@@ -437,10 +448,12 @@ function generateClassificationHTML(models, latestModel, participation, evals, d
     const ev    = evalByRound[m.round];
     const acc   = ev ? (ev.accuracy * 100).toFixed(2) + '%' : '—';
     const loss  = ev ? ev.loss.toFixed(6) : '—';
+    const f1    = ev && ev.f1 !== undefined ? (ev.f1 * 100).toFixed(2) + '%' : '—';
     return `          <tr>
             <td>${m.round}</td>
             <td>${acc}</td>
             <td>${loss}</td>
+            <td>${f1}</td>
             <td>${pInfo}</td>
             <td>${m.totalSamples || 'N/A'}</td>
             <td>${ts}</td>
@@ -461,6 +474,29 @@ function generateClassificationHTML(models, latestModel, participation, evals, d
       <h2>🎯 Accuracy &amp; Loss</h2>
       <p class="note">${evalNote}</p>
     </div>`;
+
+  const f1ChartBlock = hasF1Data ? `
+    <div class="card">
+      <h2>📈 Classification Metrics – Precision / Recall / F1 (Evaluated Rounds)</h2>
+      <div class="chart-container"><canvas id="f1Chart"></canvas></div>
+    </div>` : '';
+
+  const perClassBlock = latestPerClass ? `
+    <div class="card">
+      <h2>🔢 Per-Class Breakdown (Round ${latestEval.round})</h2>
+      <table>
+        <thead><tr><th>Digit</th><th>Precision</th><th>Recall</th><th>F1-Score</th><th>Support</th></tr></thead>
+        <tbody>
+          ${latestPerClass.map(c => `<tr>
+            <td>${c.class}</td>
+            <td>${(c.precision * 100).toFixed(2)}%</td>
+            <td>${(c.recall * 100).toFixed(2)}%</td>
+            <td>${(c.f1 * 100).toFixed(2)}%</td>
+            <td>${c.support}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -493,7 +529,11 @@ function generateClassificationHTML(models, latestModel, participation, evals, d
         <div class="stat"><div class="stat-label">Best Accuracy</div><div class="stat-value" style="color:var(--primary)">${(Math.max(...evalAccuracy)).toFixed(2)}%</div></div>
         <div class="stat"><div class="stat-label">Latest Accuracy (Rd ${latestEval.round})</div><div class="stat-value">${(latestMetrics.accuracy * 100).toFixed(2)}%</div></div>
         <div class="stat"><div class="stat-label">Latest Loss (Rd ${latestEval.round})</div><div class="stat-value">${latestMetrics.loss.toFixed(4)}</div></div>
-        <div class="stat"><div class="stat-label">Eval Sample Size</div><div class="stat-value">${latestMetrics.sampleCount || 'N/A'}</div></div>` : ''}
+        <div class="stat"><div class="stat-label">Eval Sample Size</div><div class="stat-value">${latestMetrics.sampleCount || 'N/A'}</div></div>
+        ${latestMetrics.f1 !== undefined ? `
+        <div class="stat"><div class="stat-label">Latest Precision (Rd ${latestEval.round})</div><div class="stat-value">${(latestMetrics.precision * 100).toFixed(2)}%</div></div>
+        <div class="stat"><div class="stat-label">Latest Recall (Rd ${latestEval.round})</div><div class="stat-value">${(latestMetrics.recall * 100).toFixed(2)}%</div></div>
+        <div class="stat"><div class="stat-label">Latest F1-Score (Rd ${latestEval.round})</div><div class="stat-value" style="color:var(--primary)">${(latestMetrics.f1 * 100).toFixed(2)}%</div></div>` : ''}` : ''}
         <div class="stat"><div class="stat-label">Train Samples / Round</div><div class="stat-value">${latestModel.totalSamples || 'N/A'}</div></div>
         <div class="stat"><div class="stat-label">Participants</div><div class="stat-value">${latestModel.participantCount || latestModel.participants?.length || 'N/A'}</div></div>
         ${latestModel.participants && latestModel.participants.length > 0 ? `
@@ -506,6 +546,10 @@ function generateClassificationHTML(models, latestModel, participation, evals, d
 
     ${evalChartBlock}
 
+    ${f1ChartBlock}
+
+    ${perClassBlock}
+
     <div class="card">
       <h2>👥 Participation Statistics</h2>
       <div class="chart-container"><canvas id="participationChart"></canvas></div>
@@ -515,7 +559,7 @@ function generateClassificationHTML(models, latestModel, participation, evals, d
       <h2>📋 Detailed Round History</h2>
       ${!hasEvals ? `<p class="note" style="margin-bottom:12px">${evalNote}</p>` : ''}
       <table>
-        <thead><tr><th>Round</th><th>Accuracy</th><th>Loss</th><th>Participants</th><th>Train Samples</th><th>Timestamp</th></tr></thead>
+        <thead><tr><th>Round</th><th>Accuracy</th><th>Loss</th><th>Macro F1</th><th>Participants</th><th>Train Samples</th><th>Timestamp</th></tr></thead>
         <tbody>${tableRows}</tbody>
       </table>
     </div>
@@ -556,6 +600,31 @@ function generateClassificationHTML(models, latestModel, participation, evals, d
         }
       }
     });` : '/* no evaluation data */'}
+
+    ${hasF1Data ? `
+    // Precision / Recall / F1 chart (evaluated rounds only)
+    new Chart(document.getElementById('f1Chart'), {
+      type: 'line',
+      data: {
+        labels: ${JSON.stringify(evalRounds)},
+        datasets: [
+          { label: 'Precision (%)', data: ${JSON.stringify(evalPrecision)},
+            borderColor: C.teal,   backgroundColor: 'rgba(78,205,196,0.08)', tension: 0.3, fill: false },
+          { label: 'Recall (%)',    data: ${JSON.stringify(evalRecall)},
+            borderColor: C.yellow, backgroundColor: 'rgba(255,209,102,0.08)', tension: 0.3, fill: false },
+          { label: 'F1-Score (%)', data: ${JSON.stringify(evalF1)},
+            borderColor: C.red,    backgroundColor: 'rgba(255,107,107,0.08)', tension: 0.3, fill: false }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#eaf0ff' } } },
+        scales: {
+          x: { title: { display: true, text: 'Round',     color: '#9fb0d9' }, grid: { color: C.grid }, ticks: { color: '#9fb0d9' } },
+          y: { title: { display: true, text: 'Score (%)', color: '#9fb0d9' }, grid: { color: C.grid }, ticks: { color: '#9fb0d9' }, min: 0, max: 100 }
+        }
+      }
+    });` : ''}
 
     new Chart(document.getElementById('participationChart'), {
       type: 'bar',
@@ -599,11 +668,11 @@ function main() {
     console.warn('⚠️  No global model files found. Run training first.');
   }
 
-  const evals = TYPE === 'regression' ? [] : loadEvaluations();
-  if (TYPE !== 'regression' && evals.length === 0) {
-    console.warn(`⚠️  No evaluation files found in ${EVALS_DIR} for dataset "${DATASET}".`);
-    console.warn(`   Run: node src/utils/evaluateModel.js ${DATASET} latest 2000`);
-  } else if (TYPE !== 'regression') {
+  const evals = loadEvaluations();
+  if (evals.length === 0) {
+    console.warn(`⚠️  No evaluation files found in ${EVALS_DIR}/${DATASET} for dataset "${DATASET}".`);
+    console.warn(`   Run: node src/utils/evaluateModel.js ${DATASET} latest`);
+  } else {
     console.log(`📊 Loaded ${evals.length} evaluation file(s): rounds ${evals.map(e => e.round).join(', ')}`);
   }
 
