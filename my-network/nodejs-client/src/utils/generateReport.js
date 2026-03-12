@@ -1,94 +1,107 @@
 #!/usr/bin/env node
 
 /**
- * Generate FL Training Report from saved global models
- * Reads all global-model-round-*.json files and creates an HTML report
+ * Generate FL Training Report from saved global models.
+ * Supports:
+ *   - 'regression'     datasets (simple, linear): shows weight & bias evolution
+ *   - 'classification' datasets (mnist, ...):    shows accuracy & loss from evaluation JSONs
+ *
+ * To add a new dataset, register it in DATASET_TYPES below.
+ *
+ * Usage:
+ *   node src/utils/generateReport.js [dataset]
+ *   node src/utils/generateReport.js mnist
+ *   node src/utils/generateReport.js simple
  */
 
 const fs = require('fs');
 const path = require('path');
 
 const DATASET = (process.argv[2] || process.env.FL_DATASET || 'simple').toLowerCase();
+
+// Map each known dataset name to its task type.
+// 'regression'     → stores scalar [w, b] in modelData; no external evaluation files needed.
+// 'classification' → stores full CNN weights; reads per-round evaluation JSONs for accuracy/loss.
+const DATASET_TYPES = {
+  simple: 'regression',
+  linear: 'regression',
+  mnist:  'classification',
+};
+const TYPE = DATASET_TYPES[DATASET] || 'classification';
+
 const MODELS_DIR = path.join(__dirname, '..', '..', 'models', DATASET);
+const EVALS_DIR  = path.join(__dirname, '..', '..', 'reports', 'evaluations');
 const REPORTS_DIR = path.join(__dirname, '..', '..', 'reports');
 const OUTPUT_FILE = path.join(REPORTS_DIR, `fl-training-report-${DATASET}.html`);
+
+// ── Data loading ──────────────────────────────────────────────────────────────
 
 function loadGlobalModels() {
   const files = fs.readdirSync(MODELS_DIR);
   const modelFiles = files.filter(f => f.match(/^global-model-round-\d+\.json$/));
-  
+
   const models = [];
   for (const file of modelFiles) {
-    const filepath = path.join(MODELS_DIR, file);
-    const content = fs.readFileSync(filepath, 'utf8');
-    const model = JSON.parse(content);
-    models.push(model);
+    const content = fs.readFileSync(path.join(MODELS_DIR, file), 'utf8');
+    models.push(JSON.parse(content));
   }
-  
-  // Sort by round number
+
   models.sort((a, b) => a.round - b.round);
-  
   return models;
 }
 
-function extractModelParameters(models) {
-  const rounds = [];
-  const weights = [];
-  const biases = [];
-  const participants = [];
-  const samples = [];
-  
+/** For linear datasets: extract scalar w and b from each round's modelData. */
+function extractLinearParams(models) {
+  const rounds = [], weights = [], biases = [], participants = [], samples = [];
+
   for (const model of models) {
     rounds.push(model.round);
-    
-    // Parse model data [w, b]
     const params = JSON.parse(model.modelData);
     weights.push(params[0]);
     biases.push(params[1]);
-    
-    // Get participant count from either participantCount field or participants array
-    const participantCount = model.participantCount || 
-                            (model.participants ? model.participants.length : 0);
-    participants.push(participantCount);
+    participants.push(model.participantCount || (model.participants ? model.participants.length : 0));
     samples.push(model.totalSamples || 0);
   }
-  
+
   return { rounds, weights, biases, participants, samples };
 }
 
-function generateHTMLReport(models) {
-  if (models.length === 0) {
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>FL Training Report</title>
-  <style>
-    body { font-family: sans-serif; padding: 40px; background: #f5f5f5; }
-    .error { background: #fff; padding: 20px; border-radius: 8px; color: #666; }
-  </style>
-</head>
-<body>
-  <div class="error">
-    <h1>No Training Data Found</h1>
-    <p>No global model files found in <code>models/${DATASET}</code>.</p>
-    <p>Run training first: <code>node src/launchClients.js 5 sync ${DATASET}</code></p>
-  </div>
-</body>
-</html>`;
+/** For all datasets: extract participation statistics per round. */
+function extractParticipation(models) {
+  const rounds = [], participants = [], samples = [];
+
+  for (const model of models) {
+    rounds.push(model.round);
+    participants.push(model.participantCount || (model.participants ? model.participants.length : 0));
+    samples.push(model.totalSamples || 0);
   }
-  
-  const data = extractModelParameters(models);
-  const latestModel = models[models.length - 1];
-  
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FL Training Report</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-  <style>
+
+  return { rounds, participants, samples };
+}
+
+/**
+ * Load evaluation result files produced by evaluateModel.js.
+ * Pattern: reports/evaluations/evaluation-<dataset>-round-<n>.json
+ */
+function loadEvaluations() {
+  if (!fs.existsSync(EVALS_DIR)) return [];
+  const pattern = new RegExp(`^evaluation-${DATASET}-round-(\\d+)\\.json$`);
+  const evals = [];
+
+  for (const file of fs.readdirSync(EVALS_DIR)) {
+    if (!pattern.test(file)) continue;
+    try {
+      evals.push(JSON.parse(fs.readFileSync(path.join(EVALS_DIR, file), 'utf8')));
+    } catch (_) { /* skip malformed files */ }
+  }
+
+  evals.sort((a, b) => a.round - b.round);
+  return evals;
+}
+
+// ── HTML generation ───────────────────────────────────────────────────────────
+
+const COMMON_CSS = `
     :root {
       --bg: #0b1020;
       --card: #121a33;
@@ -115,27 +128,15 @@ function generateHTMLReport(models) {
       gap: 20px;
     }
     .card {
-      background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+      border: 1px solid rgba(255,255,255,0.12);
       border-radius: 14px;
       padding: 24px;
       backdrop-filter: blur(4px);
     }
-    h1 {
-      margin: 0 0 8px;
-      font-size: 28px;
-      font-weight: 600;
-    }
-    h2 {
-      margin: 0 0 16px;
-      font-size: 18px;
-      font-weight: 500;
-    }
-    p {
-      margin: 0;
-      color: var(--muted);
-      line-height: 1.6;
-    }
+    h1 { margin: 0 0 8px; font-size: 28px; font-weight: 600; }
+    h2 { margin: 0 0 16px; font-size: 18px; font-weight: 500; }
+    p  { margin: 0; color: var(--muted); line-height: 1.6; }
     .summary-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -143,10 +144,10 @@ function generateHTMLReport(models) {
       margin-top: 16px;
     }
     .stat {
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(255,255,255,0.02);
       padding: 16px;
       border-radius: 8px;
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255,255,255,0.06);
     }
     .stat-label {
       font-size: 12px;
@@ -155,304 +156,382 @@ function generateHTMLReport(models) {
       color: var(--muted);
       margin-bottom: 4px;
     }
-    .stat-value {
-      font-size: 24px;
-      font-weight: 600;
-      color: var(--text);
-    }
-    .chart-container {
-      position: relative;
-      height: 300px;
-      margin-top: 16px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 16px;
-    }
-    th, td {
-      padding: 12px;
-      text-align: left;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    }
-    th {
-      font-weight: 500;
-      color: var(--muted);
-      font-size: 13px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    td {
-      color: var(--text);
-      font-family: 'Courier New', monospace;
-    }
-    .timestamp {
-      font-size: 14px;
-      color: var(--muted);
-      margin-top: 8px;
-    }
+    .stat-value { font-size: 24px; font-weight: 600; color: var(--text); }
+    .chart-container { position: relative; height: 300px; margin-top: 16px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    th, td { padding: 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    th { font-weight: 500; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+    td { color: var(--text); font-family: 'Courier New', monospace; }
+    .timestamp { font-size: 14px; color: var(--muted); margin-top: 8px; }
     .badge {
-      display: inline-block;
-      padding: 4px 12px;
-      border-radius: 12px;
-      font-size: 12px;
-      font-weight: 500;
-      background: rgba(78, 205, 196, 0.15);
-      color: var(--primary);
-      border: 1px solid rgba(78, 205, 196, 0.3);
+      display: inline-block; padding: 4px 12px; border-radius: 12px;
+      font-size: 12px; font-weight: 500;
+      background: rgba(78,205,196,0.15); color: var(--primary);
+      border: 1px solid rgba(78,205,196,0.3);
     }
-  </style>
+    .badge-warn {
+      background: rgba(255,209,102,0.15); color: var(--secondary);
+      border-color: rgba(255,209,102,0.3);
+    }
+    .note { font-size: 13px; color: var(--muted); margin-top: 8px; }`;
+
+function generateHTMLReport(models, evals) {
+  const datasetLabel = DATASET.toUpperCase();
+
+  if (models.length === 0) {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>FL Training Report – ${datasetLabel}</title>
+<style>body{font-family:sans-serif;padding:40px;background:#f5f5f5}.error{background:#fff;padding:20px;border-radius:8px;color:#666}</style>
+</head><body><div class="error">
+  <h1>No Training Data Found</h1>
+  <p>No global model files found in <code>models/${DATASET}</code>.</p>
+  <p>Run training first: <code>node src/launchClients.js 5 sync ${DATASET}</code></p>
+</div></body></html>`;
+  }
+
+  const latestModel = models[models.length - 1];
+  const participation = extractParticipation(models);
+
+  return TYPE === 'regression'
+    ? generateLinearHTML(models, latestModel, participation, datasetLabel)
+    : generateClassificationHTML(models, latestModel, participation, evals, datasetLabel);
+}
+
+// ── Linear report ─────────────────────────────────────────────────────────────
+
+function generateLinearHTML(models, latestModel, participation, datasetLabel) {
+  const data = extractLinearParams(models);
+
+  const tableRows = models.map(m => {
+    const params = JSON.parse(m.modelData);
+    const ts = m.timestamp ? new Date(m.timestamp * 1000).toLocaleString() : 'N/A';
+    const pInfo = m.participants && m.participants.length > 0
+      ? m.participants.join(', ') : (m.participantCount || 'N/A');
+    return `          <tr>
+            <td>${m.round}</td>
+            <td>${params[0].toFixed(6)}</td>
+            <td>${params[1].toFixed(6)}</td>
+            <td>${pInfo}</td>
+            <td>${m.totalSamples || 'N/A'}</td>
+            <td>${ts}</td>
+          </tr>`;
+  }).join('\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FL Training Report – ${datasetLabel}</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <style>${COMMON_CSS}</style>
 </head>
 <body>
   <div class="container">
-    <!-- Header -->
     <div class="card">
       <h1>🔄 Federated Learning Training Report</h1>
-      <p>Hierarchical two-layer FL aggregation on Hyperledger Fabric</p>
+      <p>Hierarchical two-layer FL aggregation on Hyperledger Fabric &mdash; Linear Regression (${datasetLabel})</p>
       <div class="timestamp">
-        Generated: ${new Date().toLocaleString()} | 
+        Generated: ${new Date().toLocaleString()} |
         <span class="badge">VPSA Strategy</span>
+        <span class="badge" style="margin-left:6px">${datasetLabel}</span>
       </div>
     </div>
 
-    <!-- Summary Statistics -->
     <div class="card">
       <h2>📊 Training Summary</h2>
       <div class="summary-grid">
-        <div class="stat">
-          <div class="stat-label">Total Rounds</div>
-          <div class="stat-value">${models.length}</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Latest Weight</div>
-          <div class="stat-value">${data.weights[data.weights.length - 1].toFixed(4)}</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Latest Bias</div>
-          <div class="stat-value">${data.biases[data.biases.length - 1].toFixed(4)}</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Participants</div>
-          <div class="stat-value">${latestModel.participantCount || latestModel.participants?.length || 'N/A'}</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Total Samples</div>
-          <div class="stat-value">${latestModel.totalSamples || 'N/A'}</div>
-        </div>
+        <div class="stat"><div class="stat-label">Total Rounds</div><div class="stat-value">${models.length}</div></div>
+        <div class="stat"><div class="stat-label">Latest Weight (w)</div><div class="stat-value">${data.weights[data.weights.length - 1].toFixed(4)}</div></div>
+        <div class="stat"><div class="stat-label">Latest Bias (b)</div><div class="stat-value">${data.biases[data.biases.length - 1].toFixed(4)}</div></div>
+        <div class="stat"><div class="stat-label">Participants</div><div class="stat-value">${latestModel.participantCount || latestModel.participants?.length || 'N/A'}</div></div>
+        <div class="stat"><div class="stat-label">Total Samples</div><div class="stat-value">${latestModel.totalSamples || 'N/A'}</div></div>
         ${latestModel.participants && latestModel.participants.length > 0 ? `
-        <div class="stat" style="grid-column: 1 / -1;">
-          <div class="stat-label">Participating Organizations</div>
-          <div class="stat-value" style="font-size: 16px;">${latestModel.participants.join(', ')}</div>
+        <div class="stat" style="grid-column:1/-1">
+          <div class="stat-label">Organizations</div>
+          <div class="stat-value" style="font-size:16px">${latestModel.participants.join(', ')}</div>
         </div>` : ''}
       </div>
     </div>
 
-    <!-- Weight & Bias Chart -->
     <div class="card">
       <h2>📈 Model Parameters Evolution</h2>
-      <div class="chart-container">
-        <canvas id="paramsChart"></canvas>
-      </div>
+      <div class="chart-container"><canvas id="paramsChart"></canvas></div>
     </div>
 
-    <!-- Participants & Samples Chart -->
     <div class="card">
       <h2>👥 Participation Statistics</h2>
-      <div class="chart-container">
-        <canvas id="participationChart"></canvas>
-      </div>
+      <div class="chart-container"><canvas id="participationChart"></canvas></div>
     </div>
 
-    <!-- Detailed Table -->
     <div class="card">
       <h2>📋 Detailed Round History</h2>
       <table>
-        <thead>
-          <tr>
-            <th>Round</th>
-            <th>Weight (w)</th>
-            <th>Bias (b)</th>
-            <th>Participants</th>
-            <th>Total Samples</th>
-            <th>Timestamp</th>
-          </tr>
-        </thead>
-        <tbody>
-${models.map(m => {
-  const params = JSON.parse(m.modelData);
-  // Convert Unix timestamp (seconds) to JavaScript Date (milliseconds)
-  const timestamp = m.timestamp ? new Date(m.timestamp * 1000).toLocaleString() : 'N/A';
-  // Display participants list or count
-  const participantInfo = m.participants && m.participants.length > 0 
-    ? m.participants.join(', ') 
-    : (m.participantCount || 'N/A');
-  
-  return `          <tr>
-            <td>${m.round}</td>
-            <td>${params[0].toFixed(6)}</td>
-            <td>${params[1].toFixed(6)}</td>
-            <td>${participantInfo}</td>
-            <td>${m.totalSamples || 'N/A'}</td>
-            <td>${timestamp}</td>
-          </tr>`;
-}).join('\n')}
-        </tbody>
+        <thead><tr><th>Round</th><th>Weight (w)</th><th>Bias (b)</th><th>Participants</th><th>Total Samples</th><th>Timestamp</th></tr></thead>
+        <tbody>${tableRows}</tbody>
       </table>
     </div>
   </div>
 
   <script>
-    const chartColors = {
-      weight: 'rgba(78, 205, 196, 1)',
-      bias: 'rgba(255, 209, 102, 1)',
-      participants: 'rgba(255, 107, 107, 1)',
-      samples: 'rgba(159, 176, 217, 1)',
-      grid: 'rgba(255, 255, 255, 0.08)'
+    const C = {
+      teal: 'rgba(78,205,196,1)', yellow: 'rgba(255,209,102,1)',
+      red:  'rgba(255,107,107,1)', blue:  'rgba(159,176,217,1)',
+      grid: 'rgba(255,255,255,0.08)'
     };
 
-    // Parameters Chart
     new Chart(document.getElementById('paramsChart'), {
       type: 'line',
       data: {
         labels: ${JSON.stringify(data.rounds)},
         datasets: [
-          {
-            label: 'Weight (w)',
-            data: ${JSON.stringify(data.weights)},
-            borderColor: chartColors.weight,
-            backgroundColor: 'rgba(78, 205, 196, 0.1)',
-            tension: 0.3,
-            fill: true
-          },
-          {
-            label: 'Bias (b)',
-            data: ${JSON.stringify(data.biases)},
-            borderColor: chartColors.bias,
-            backgroundColor: 'rgba(255, 209, 102, 0.1)',
-            tension: 0.3,
-            fill: true
-          }
+          { label: 'Weight (w)', data: ${JSON.stringify(data.weights)},
+            borderColor: C.teal,  backgroundColor: 'rgba(78,205,196,0.1)',  tension: 0.3, fill: true },
+          { label: 'Bias (b)',   data: ${JSON.stringify(data.biases)},
+            borderColor: C.yellow, backgroundColor: 'rgba(255,209,102,0.1)', tension: 0.3, fill: true }
         ]
       },
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            labels: { color: '#eaf0ff' }
-          }
-        },
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#eaf0ff' } } },
         scales: {
-          x: {
-            title: { display: true, text: 'Round', color: '#9fb0d9' },
-            grid: { color: chartColors.grid },
-            ticks: { color: '#9fb0d9' }
-          },
-          y: {
-            title: { display: true, text: 'Value', color: '#9fb0d9' },
-            grid: { color: chartColors.grid },
-            ticks: { color: '#9fb0d9' }
-          }
+          x: { title: { display: true, text: 'Round',  color: '#9fb0d9' }, grid: { color: C.grid }, ticks: { color: '#9fb0d9' } },
+          y: { title: { display: true, text: 'Value',  color: '#9fb0d9' }, grid: { color: C.grid }, ticks: { color: '#9fb0d9' } }
         }
       }
     });
 
-    // Participation Chart
     new Chart(document.getElementById('participationChart'), {
       type: 'bar',
       data: {
-        labels: ${JSON.stringify(data.rounds)},
+        labels: ${JSON.stringify(participation.rounds)},
         datasets: [
-          {
-            label: 'Participants',
-            data: ${JSON.stringify(data.participants)},
-            backgroundColor: 'rgba(255, 107, 107, 0.7)',
-            borderColor: chartColors.participants,
-            borderWidth: 1,
-            yAxisID: 'y'
-          },
-          {
-            label: 'Total Samples',
-            data: ${JSON.stringify(data.samples)},
-            backgroundColor: 'rgba(159, 176, 217, 0.7)',
-            borderColor: chartColors.samples,
-            borderWidth: 1,
-            yAxisID: 'y1'
-          }
+          { label: 'Participants',  data: ${JSON.stringify(participation.participants)},
+            backgroundColor: 'rgba(255,107,107,0.7)', borderColor: C.red,  borderWidth: 1, yAxisID: 'y'  },
+          { label: 'Total Samples', data: ${JSON.stringify(participation.samples)},
+            backgroundColor: 'rgba(159,176,217,0.7)', borderColor: C.blue, borderWidth: 1, yAxisID: 'y1' }
         ]
       },
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            labels: { color: '#eaf0ff' }
-          }
-        },
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#eaf0ff' } } },
         scales: {
-          x: {
-            title: { display: true, text: 'Round', color: '#9fb0d9' },
-            grid: { color: chartColors.grid },
-            ticks: { 
-              color: '#9fb0d9',
-              stepSize: 1
-            }
-          },
-          y: {
-            type: 'linear',
-            position: 'left',
-            title: { display: true, text: 'Participants', color: '#9fb0d9' },
-            grid: { color: chartColors.grid },
-            ticks: { 
-              color: '#9fb0d9',
-              stepSize: 1,
-              precision: 0,
-              callback: function(value) {
-                if (Number.isInteger(value)) {
-                  return value;
-                }
-              }
-            }
-          },
-          y1: {
-            type: 'linear',
-            position: 'right',
-            title: { display: true, text: 'Samples', color: '#9fb0d9' },
-            grid: { display: false },
-            ticks: { 
-              color: '#9fb0d9',
-              stepSize: 10
-            }
-          }
+          x:  { title: { display: true, text: 'Round',        color: '#9fb0d9' }, grid: { color: C.grid }, ticks: { color: '#9fb0d9' } },
+          y:  { type: 'linear', position: 'left',  title: { display: true, text: 'Participants', color: '#9fb0d9' },
+                grid: { color: C.grid }, ticks: { color: '#9fb0d9', stepSize: 1, precision: 0,
+                  callback: v => Number.isInteger(v) ? v : undefined } },
+          y1: { type: 'linear', position: 'right', title: { display: true, text: 'Samples',      color: '#9fb0d9' },
+                grid: { display: false }, ticks: { color: '#9fb0d9' } }
         }
       }
     });
   </script>
 </body>
 </html>`;
-  
-  return html;
 }
+
+// ── Classification (MNIST) report ─────────────────────────────────────────────
+
+function generateClassificationHTML(models, latestModel, participation, evals, datasetLabel) {
+  // Build a lookup: round → eval result
+  const evalByRound = {};
+  for (const e of evals) evalByRound[e.round] = e.result && e.result.overall ? e.result.overall : null;
+
+  const latestEval = evals.length > 0 ? evals[evals.length - 1] : null;
+  const latestMetrics = latestEval && latestEval.result && latestEval.result.overall
+    ? latestEval.result.overall : null;
+
+  const hasEvals = evals.length > 0;
+
+  // Data for accuracy / loss chart (only evaluated rounds)
+  const evalRounds    = evals.map(e => e.round);
+  const evalAccuracy  = evals.map(e => e.result && e.result.overall ? +(e.result.overall.accuracy * 100).toFixed(2) : null);
+  const evalLoss      = evals.map(e => e.result && e.result.overall ? +e.result.overall.loss.toFixed(6)             : null);
+
+  // Per-round table rows (all training rounds; merge eval data where available)
+  const tableRows = models.map(m => {
+    const ts    = m.timestamp ? new Date(m.timestamp * 1000).toLocaleString() : 'N/A';
+    const pInfo = m.participants && m.participants.length > 0
+      ? m.participants.join(', ') : (m.participantCount || 'N/A');
+    const ev    = evalByRound[m.round];
+    const acc   = ev ? (ev.accuracy * 100).toFixed(2) + '%' : '—';
+    const loss  = ev ? ev.loss.toFixed(6) : '—';
+    return `          <tr>
+            <td>${m.round}</td>
+            <td>${acc}</td>
+            <td>${loss}</td>
+            <td>${pInfo}</td>
+            <td>${m.totalSamples || 'N/A'}</td>
+            <td>${ts}</td>
+          </tr>`;
+  }).join('\n');
+
+  const evalNote = hasEvals
+    ? `Evaluation data available for ${evals.length} round(s): ${evalRounds.join(', ')}.
+       Run <code>node src/utils/evaluateModel.js ${DATASET} &lt;round&gt; 2000</code> to add more.`
+    : `No evaluation data found. Run <code>node src/utils/evaluateModel.js ${DATASET} latest 2000</code> to generate accuracy metrics.`;
+
+  const evalChartBlock = hasEvals ? `
+    <div class="card">
+      <h2>🎯 Accuracy &amp; Loss (Evaluated Rounds)</h2>
+      <div class="chart-container"><canvas id="metricsChart"></canvas></div>
+    </div>` : `
+    <div class="card">
+      <h2>🎯 Accuracy &amp; Loss</h2>
+      <p class="note">${evalNote}</p>
+    </div>`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FL Training Report – ${datasetLabel}</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <style>${COMMON_CSS}</style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>🔄 Federated Learning Training Report</h1>
+      <p>Hierarchical two-layer FL aggregation on Hyperledger Fabric &mdash; Image Classification (${datasetLabel})</p>
+      <div class="timestamp">
+        Generated: ${new Date().toLocaleString()} |
+        <span class="badge">VPSA Strategy</span>
+        <span class="badge" style="margin-left:6px">${datasetLabel}</span>
+        ${!hasEvals ? '<span class="badge badge-warn" style="margin-left:6px">No Evaluations</span>' : ''}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>📊 Training Summary</h2>
+      <div class="summary-grid">
+        <div class="stat"><div class="stat-label">Total Rounds</div><div class="stat-value">${models.length}</div></div>
+        <div class="stat"><div class="stat-label">Evaluated Rounds</div><div class="stat-value">${evals.length}</div></div>
+        ${latestMetrics ? `
+        <div class="stat"><div class="stat-label">Best Accuracy</div><div class="stat-value" style="color:var(--primary)">${(Math.max(...evalAccuracy)).toFixed(2)}%</div></div>
+        <div class="stat"><div class="stat-label">Latest Accuracy (Rd ${latestEval.round})</div><div class="stat-value">${(latestMetrics.accuracy * 100).toFixed(2)}%</div></div>
+        <div class="stat"><div class="stat-label">Latest Loss (Rd ${latestEval.round})</div><div class="stat-value">${latestMetrics.loss.toFixed(4)}</div></div>
+        <div class="stat"><div class="stat-label">Eval Sample Size</div><div class="stat-value">${latestMetrics.sampleCount || 'N/A'}</div></div>` : ''}
+        <div class="stat"><div class="stat-label">Train Samples / Round</div><div class="stat-value">${latestModel.totalSamples || 'N/A'}</div></div>
+        <div class="stat"><div class="stat-label">Participants</div><div class="stat-value">${latestModel.participantCount || latestModel.participants?.length || 'N/A'}</div></div>
+        ${latestModel.participants && latestModel.participants.length > 0 ? `
+        <div class="stat" style="grid-column:1/-1">
+          <div class="stat-label">Organizations</div>
+          <div class="stat-value" style="font-size:16px">${latestModel.participants.join(', ')}</div>
+        </div>` : ''}
+      </div>
+    </div>
+
+    ${evalChartBlock}
+
+    <div class="card">
+      <h2>👥 Participation Statistics</h2>
+      <div class="chart-container"><canvas id="participationChart"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h2>📋 Detailed Round History</h2>
+      ${!hasEvals ? `<p class="note" style="margin-bottom:12px">${evalNote}</p>` : ''}
+      <table>
+        <thead><tr><th>Round</th><th>Accuracy</th><th>Loss</th><th>Participants</th><th>Train Samples</th><th>Timestamp</th></tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const C = {
+      teal: 'rgba(78,205,196,1)', yellow: 'rgba(255,209,102,1)',
+      red:  'rgba(255,107,107,1)', blue:  'rgba(159,176,217,1)',
+      grid: 'rgba(255,255,255,0.08)'
+    };
+
+    ${hasEvals ? `
+    // Accuracy & Loss chart (evaluated rounds only)
+    new Chart(document.getElementById('metricsChart'), {
+      type: 'line',
+      data: {
+        labels: ${JSON.stringify(evalRounds)},
+        datasets: [
+          { label: 'Accuracy (%)', data: ${JSON.stringify(evalAccuracy)},
+            borderColor: C.teal,   backgroundColor: 'rgba(78,205,196,0.12)',  tension: 0.3, fill: true, yAxisID: 'yAcc' },
+          { label: 'Loss',         data: ${JSON.stringify(evalLoss)},
+            borderColor: C.yellow, backgroundColor: 'rgba(255,209,102,0.08)', tension: 0.3, fill: false, yAxisID: 'yLoss' }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#eaf0ff' } } },
+        scales: {
+          x:     { title: { display: true, text: 'Round',        color: '#9fb0d9' }, grid: { color: C.grid }, ticks: { color: '#9fb0d9' } },
+          yAcc:  { type: 'linear', position: 'left',
+                   title: { display: true, text: 'Accuracy (%)', color: '#9fb0d9' },
+                   grid: { color: C.grid }, ticks: { color: '#9fb0d9' },
+                   min: Math.max(0, ${Math.min(...evalAccuracy.filter(v=>v!=null))} - 5), max: 100 },
+          yLoss: { type: 'linear', position: 'right',
+                   title: { display: true, text: 'Loss',         color: '#9fb0d9' },
+                   grid: { display: false }, ticks: { color: '#9fb0d9' } }
+        }
+      }
+    });` : '/* no evaluation data */'}
+
+    new Chart(document.getElementById('participationChart'), {
+      type: 'bar',
+      data: {
+        labels: ${JSON.stringify(participation.rounds)},
+        datasets: [
+          { label: 'Participants',  data: ${JSON.stringify(participation.participants)},
+            backgroundColor: 'rgba(255,107,107,0.7)', borderColor: C.red,  borderWidth: 1, yAxisID: 'y'  },
+          { label: 'Train Samples', data: ${JSON.stringify(participation.samples)},
+            backgroundColor: 'rgba(159,176,217,0.7)', borderColor: C.blue, borderWidth: 1, yAxisID: 'y1' }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#eaf0ff' } } },
+        scales: {
+          x:  { title: { display: true, text: 'Round',        color: '#9fb0d9' }, grid: { color: C.grid }, ticks: { color: '#9fb0d9' } },
+          y:  { type: 'linear', position: 'left',  title: { display: true, text: 'Participants', color: '#9fb0d9' },
+                grid: { color: C.grid }, ticks: { color: '#9fb0d9', stepSize: 1, precision: 0,
+                  callback: v => Number.isInteger(v) ? v : undefined } },
+          y1: { type: 'linear', position: 'right', title: { display: true, text: 'Samples',      color: '#9fb0d9' },
+                grid: { display: false }, ticks: { color: '#9fb0d9' } }
+        }
+      }
+    });
+  </script>
+</body>
+</html>`;
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
 
 function main() {
   if (!fs.existsSync(MODELS_DIR)) {
     console.error('❌ Models directory not found:', MODELS_DIR);
     process.exit(1);
   }
-  
+
   const models = loadGlobalModels();
-  
   if (models.length === 0) {
     console.warn('⚠️  No global model files found. Run training first.');
   }
-  
-  const html = generateHTMLReport(models);
-  
-  // Ensure reports directory exists
+
+  const evals = TYPE === 'regression' ? [] : loadEvaluations();
+  if (TYPE !== 'regression' && evals.length === 0) {
+    console.warn(`⚠️  No evaluation files found in ${EVALS_DIR} for dataset "${DATASET}".`);
+    console.warn(`   Run: node src/utils/evaluateModel.js ${DATASET} latest 2000`);
+  } else if (TYPE !== 'regression') {
+    console.log(`📊 Loaded ${evals.length} evaluation file(s): rounds ${evals.map(e => e.round).join(', ')}`);
+  }
+
   if (!fs.existsSync(REPORTS_DIR)) {
     fs.mkdirSync(REPORTS_DIR, { recursive: true });
   }
-  
+
+  const html = generateHTMLReport(models, evals);
   fs.writeFileSync(OUTPUT_FILE, html);
   console.log(`✅ Report generated: ${OUTPUT_FILE}`);
   console.log(`\n📂 Open in browser: file://${OUTPUT_FILE}`);

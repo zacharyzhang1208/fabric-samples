@@ -60,7 +60,8 @@ class MNISTFileLoader {
     
     const images = [];
     for (let i = 0; i < numSamples; i++) {
-      const image = new Uint8Array(imageSize);
+      // Use float storage for normalized pixels; Uint8Array would truncate to 0/1.
+      const image = new Float32Array(imageSize);
       for (let j = 0; j < imageSize; j++) {
         image[j] = buffer[offset++] / 255; // Normalize to [0, 1]
       }

@@ -785,15 +785,17 @@ class FlClient {
 
     try {
       const parsed = JSON.parse(globalModel.modelData);
+      const refreshedModel = this.dataLoader.buildModel();
       
       if (this.dataset === 'simple' || this.dataset === 'linear') {
         // Simple format: [w, b]
         if (!Array.isArray(parsed) || parsed.length < 2) {
           console.log(`[${this.clientId}] Global modelData format invalid, skip local update`);
+          refreshedModel.dispose();
           return;
         }
         const [w, b] = parsed;
-        this.model.setWeights([
+        refreshedModel.setWeights([
           tf.tensor2d([w], [1, 1]),
           tf.tensor1d([b]),
         ]);
@@ -802,11 +804,17 @@ class FlClient {
         // CNN format: flattened 1D array, use dataLoader to unflatten
         if (!Array.isArray(parsed)) {
           console.log(`[${this.clientId}] Global modelData format invalid, expected array`);
+          refreshedModel.dispose();
           return;
         }
-        this.dataLoader.deserializeGlobalModel(parsed, this.model);
+        this.dataLoader.deserializeGlobalModel(parsed, refreshedModel);
         console.log(`[${this.clientId}] Updated CNN model from global (${parsed.length} params)`);
       }
+
+      if (this.model) {
+        this.model.dispose();
+      }
+      this.model = refreshedModel;
     } catch (err) {
       console.log(`[${this.clientId}] Failed to parse global modelData: ${err.message}`);
     }

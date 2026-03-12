@@ -181,7 +181,7 @@ class MNISTLoader extends DataLoader {
     });
 
     model.compile({
-      optimizer: tf.train.adam(0.001),
+      optimizer: tf.train.momentum(0.01, 0.9),
       loss: 'categoricalCrossentropy',
       metrics: ['accuracy'],
     });
