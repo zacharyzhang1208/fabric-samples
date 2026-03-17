@@ -9,6 +9,13 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const {
+  createRunId,
+  ensureDirectory,
+  writeJson,
+  readJsonIfExists,
+  summarizeDurations,
+} = require('./utils/timing');
 
 // Configuration for each client: org, node, port, organization parameters
 const CLIENTS = [
@@ -114,10 +121,18 @@ async function main() {
   const mode = process.argv[3] || 'sync';
   const dataset = process.argv[4] || 'linear';
   const mnistSamples = process.argv[5] ? Number(process.argv[5]) : 20000;
+  const runId = createRunId({ dataset, mode, epochs });
+  const timingRoot = path.join(__dirname, '..', 'reports', 'timing', runId);
+  const runStartedAtMs = Date.now();
+
+  ensureDirectory(path.join(timingRoot, 'clients'));
+  process.env.FL_TIMING_RUN_ID = runId;
+  process.env.FL_TIMING_ROOT = timingRoot;
 
   console.log(`[LAUNCHER] Starting ${CLIENTS.length} FL clients`);
   console.log(`[LAUNCHER] Topology: Bank A (Org1) - 2 nodes, Bank B (Org2) - 3 nodes`);
   console.log(`[LAUNCHER] Configuration: epochs=${epochs}, mode=${mode}, dataset=${dataset}`);
+  console.log(`[LAUNCHER] Timing run ID: ${runId}`);
   if (dataset === 'mnist') {
     console.log(`[LAUNCHER] MNIST samples: ${mnistSamples}`);
   }
@@ -160,7 +175,28 @@ async function main() {
     process.exit(1);
   }
 
-  const processes = CLIENTS.map((config) => launchClient(config, epochs, mode, dataset, mnistSamples));
+  writeJson(path.join(timingRoot, 'run-summary.json'), {
+    runId,
+    dataset,
+    mode,
+    epochs,
+    mnistSamples,
+    startedAt: new Date(runStartedAtMs).toISOString(),
+    startedAtMs: runStartedAtMs,
+    status: 'running',
+    clients: CLIENTS.map((config) => `${config.org}-N${config.node}`),
+  });
+
+  const childExitCodes = {};
+  const processes = CLIENTS.map((config) => {
+    const child = launchClient(config, epochs, mode, dataset, mnistSamples);
+    const clientId = `${config.org}-N${config.node}`;
+    childExitCodes[clientId] = null;
+    child.on('exit', (code) => {
+      childExitCodes[clientId] = code;
+    });
+    return child;
+  });
 
   // Wait for all processes to complete
   await Promise.all(
@@ -176,6 +212,7 @@ async function main() {
   
   // Generate training report
   console.log(`\n[LAUNCHER] Generating training report...`);
+  const reportStartedAtMs = Date.now();
   const reportScript = path.join(__dirname, 'utils', 'generateReport.js');
   const reportProc = spawn('node', [reportScript, dataset], {
     stdio: 'inherit',
@@ -185,6 +222,45 @@ async function main() {
   await new Promise((resolve) => {
     reportProc.on('exit', resolve);
   });
+
+  const clientTimings = CLIENTS.map((config) => {
+    const clientId = `${config.org}-N${config.node}`;
+    const filePath = path.join(timingRoot, 'clients', `${clientId}.json`);
+    return readJsonIfExists(filePath) || { clientId, status: 'missing' };
+  });
+
+  const roundDurations = clientTimings.flatMap((client) =>
+    Array.isArray(client.rounds) ? client.rounds.map((round) => round.totalMs) : []
+  );
+  const submitDurations = clientTimings.flatMap((client) =>
+    Array.isArray(client.rounds) ? client.rounds.map((round) => round.submitUpdateMs) : []
+  );
+  const queryDurations = clientTimings.flatMap((client) =>
+    Array.isArray(client.rounds) ? client.rounds.map((round) => round.queryGlobalModelMs) : []
+  );
+  const runEndedAtMs = Date.now();
+
+  writeJson(path.join(timingRoot, 'run-summary.json'), {
+    runId,
+    dataset,
+    mode,
+    epochs,
+    mnistSamples,
+    startedAt: new Date(runStartedAtMs).toISOString(),
+    startedAtMs: runStartedAtMs,
+    endedAt: new Date(runEndedAtMs).toISOString(),
+    endedAtMs: runEndedAtMs,
+    totalMs: runEndedAtMs - runStartedAtMs,
+    reportGenerationMs: runEndedAtMs - reportStartedAtMs,
+    status: 'completed',
+    childExitCodes,
+    roundTotalMs: summarizeDurations(roundDurations),
+    submitUpdateMs: summarizeDurations(submitDurations),
+    queryGlobalModelMs: summarizeDurations(queryDurations),
+    clients: clientTimings,
+  });
+
+  console.log(`[LAUNCHER] Timing summary written to reports/timing/${runId}/run-summary.json`);
 }
 
 main().catch(console.error);

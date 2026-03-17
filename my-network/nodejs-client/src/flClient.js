@@ -18,6 +18,7 @@ const tf = require('@tensorflow/tfjs-node');
 const path = require('path');
 const fs = require('fs');
 const { Gateway } = require('fabric-network');
+const { writeJson } = require('./utils/timing');
 
 function buildClientFabricClient(options) {
   /**
@@ -328,14 +329,56 @@ class FlClient {
     this.localData = null;
     this.mode = options.mode || 'sync';
     this.dataLoader = null;
+    this.timingRoot = process.env.FL_TIMING_ROOT || path.join(this.projectRoot, 'nodejs-client', 'reports', 'timing', 'adhoc');
+    this.runId = process.env.FL_TIMING_RUN_ID || 'adhoc';
+    this.timingFilePath = path.join(this.timingRoot, 'clients', `${this.clientId}.json`);
+    this.timing = {
+      runId: this.runId,
+      clientId: this.clientId,
+      dataset: this.dataset,
+      mode: this.mode,
+      org: this.org,
+      nodeId: this.nodeId,
+      orgMspId: this.orgMspId,
+      peerName: this.peerName,
+      startedAt: new Date().toISOString(),
+      startedAtMs: Date.now(),
+      status: 'running',
+      initialization: {},
+      training: {},
+      rounds: [],
+    };
+  }
+
+  writeTimingSnapshot() {
+    this.timing.updatedAt = new Date().toISOString();
+    writeJson(this.timingFilePath, this.timing);
+  }
+
+  finalizeTiming(status, extra = {}) {
+    this.timing.status = status;
+    this.timing.endedAt = new Date().toISOString();
+    this.timing.endedAtMs = Date.now();
+    this.timing.totalMs = this.timing.endedAtMs - this.timing.startedAtMs;
+    Object.assign(this.timing, extra);
+    this.writeTimingSnapshot();
   }
 
   async initialize() {
     console.log(`[${this.clientId}] Initializing... (${this.orgDomain}/${this.peerName})`);
     console.log(`[${this.clientId}] Using dataset: ${this.dataset}`);
+    let phaseStart = Date.now();
     await this.setupFabricClient();
+    this.timing.initialization.fabricConnectMs = Date.now() - phaseStart;
+
+    phaseStart = Date.now();
     await this.generateLocalDataset();
+    this.timing.initialization.loadDatasetMs = Date.now() - phaseStart;
+
+    phaseStart = Date.now();
     this.buildModel();
+    this.timing.initialization.buildModelMs = Date.now() - phaseStart;
+    this.writeTimingSnapshot();
   }
 
   async setupFabricClient() {
@@ -999,30 +1042,65 @@ async function main() {
     mnistSamples: argv['mnist-samples'],
   });
 
+  let fatalError = null;
+  let completedRounds = 0;
+  let failedRound = null;
+
   try {
     await client.initialize();
 
     // Try to load latest global model from chain
+    let phaseStart = Date.now();
     const lastCompletedRound = await client.loadLatestGlobalModel();
+    client.timing.initialization.loadLatestGlobalModelMs = Date.now() - phaseStart;
+    client.timing.initialization.lastCompletedRound = lastCompletedRound;
     const startRound = lastCompletedRound + 1;
     const endRound = lastCompletedRound + argv.epochs;
+    client.timing.training = {
+      requestedEpochs: argv.epochs,
+      startRound,
+      endRound,
+      dataset: argv.dataset,
+      mode: argv.mode,
+    };
+    client.writeTimingSnapshot();
     
     console.log(`\n[${client.clientId}] Starting training from round ${startRound} to ${endRound}`);
 
     // FL training: each epoch triggers one round of aggregation
     for (let epoch = 1; epoch <= argv.epochs; epoch++) {
       const currentRound = lastCompletedRound + epoch;
+      const roundTiming = {
+        epoch,
+        round: currentRound,
+        startedAt: new Date().toISOString(),
+        startedAtMs: Date.now(),
+        status: 'running',
+      };
       console.log(`\n========== Epoch ${epoch}/${argv.epochs} (Round ${currentRound}) ==========`);
 
       // Local training for 1 epoch
+      phaseStart = Date.now();
       await client.trainOneEpoch();
+      roundTiming.localTrainMs = Date.now() - phaseStart;
 
       // Small delay to simulate network latency
+      phaseStart = Date.now();
       await new Promise((r) => setTimeout(r, 1000));
+      roundTiming.postTrainDelayMs = Date.now() - phaseStart;
 
       // Submit update to chain (use actual round number)
+      phaseStart = Date.now();
       const submitted = await client.submitUpdateToChain(currentRound);
+      roundTiming.submitUpdateMs = Date.now() - phaseStart;
       if (!submitted) {
+        roundTiming.status = 'submit-failed';
+        roundTiming.endedAt = new Date().toISOString();
+        roundTiming.endedAtMs = Date.now();
+        roundTiming.totalMs = roundTiming.endedAtMs - roundTiming.startedAtMs;
+        client.timing.rounds.push(roundTiming);
+        client.writeTimingSnapshot();
+        failedRound = currentRound;
         console.log(`[${client.clientId}] Stop training: failed to submit update for round ${currentRound}`);
         break;
       }
@@ -1032,26 +1110,63 @@ async function main() {
         console.log(`[${client.clientId}] Waiting for on-chain ready signal...`);
       } else {
         // Async mode keeps a short settle delay to avoid immediate hot polling.
+        phaseStart = Date.now();
         await new Promise((r) => setTimeout(r, 500));
+        roundTiming.asyncSettleDelayMs = Date.now() - phaseStart;
       }
 
       // Query and apply global model (use actual round number)
+      phaseStart = Date.now();
       const globalModel = await client.queryGlobalModel(currentRound);
+      roundTiming.queryGlobalModelMs = Date.now() - phaseStart;
       if (globalModel) {
+        phaseStart = Date.now();
         client.updateModelFromGlobal(globalModel);
+        roundTiming.applyGlobalModelMs = Date.now() - phaseStart;
         // Save global model to local file
+        phaseStart = Date.now();
         client.saveGlobalModelToFile(globalModel, currentRound);
+        roundTiming.saveGlobalModelMs = Date.now() - phaseStart;
+        roundTiming.status = 'completed';
+        completedRounds += 1;
       } else {
+        roundTiming.status = 'global-model-unavailable';
+        failedRound = currentRound;
         console.log(`[${client.clientId}] Stop training: global model unavailable for round ${currentRound}`);
+        roundTiming.endedAt = new Date().toISOString();
+        roundTiming.endedAtMs = Date.now();
+        roundTiming.totalMs = roundTiming.endedAtMs - roundTiming.startedAtMs;
+        client.timing.rounds.push(roundTiming);
+        client.writeTimingSnapshot();
         break;
       }
+
+      roundTiming.endedAt = new Date().toISOString();
+      roundTiming.endedAtMs = Date.now();
+      roundTiming.totalMs = roundTiming.endedAtMs - roundTiming.startedAtMs;
+      client.timing.rounds.push(roundTiming);
+      client.writeTimingSnapshot();
     }
 
+    client.timing.training.completedRounds = completedRounds;
+    if (failedRound !== null) {
+      client.timing.training.failedRound = failedRound;
+    }
     console.log(`\n[${client.clientId}] All epochs completed (${argv.epochs} FL rounds)`);
   } catch (err) {
+    fatalError = err;
+    client.timing.error = {
+      message: String(err && err.message ? err.message : err),
+      stack: err && err.stack ? err.stack : null,
+    };
     console.error(`[${client.clientId}] Fatal error:`, err);
-    process.exit(1);
+    process.exitCode = 1;
   } finally {
+    client.timing.training.completedRounds = completedRounds;
+    if (failedRound !== null) {
+      client.timing.training.failedRound = failedRound;
+    }
+    client.finalizeTiming(fatalError ? 'failed' : 'completed');
     await client.cleanup();
   }
 }
