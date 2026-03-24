@@ -177,12 +177,13 @@ class FabricClient {
     return this.submit('AggregationContract:FinalizeSyncRound', round);
   }
 
-  async submitLocalUpdateAsync(collection, updateData, sampleCount) {
+  async submitLocalUpdateAsync(collection, updateData, sampleCount, baselineVersion = 0) {
     return this.submit(
       'AggregationContract:SubmitLocalUpdateAsync',
       collection,
       updateData,
-      sampleCount
+      sampleCount,
+      baselineVersion
     );
   }
 

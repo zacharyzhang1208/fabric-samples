@@ -36,13 +36,27 @@ const MODELS_DIR = path.join(__dirname, '..', '..', 'models', DATASET);
 // ── Data loading ──────────────────────────────────────────────────────────────
 
 function loadGlobalModels() {
-  const files = fs.readdirSync(MODELS_DIR);
-  const modelFiles = files.filter(f => f.match(/^global-model-round-\d+\.json$/));
+  const dirs = [MODELS_DIR, path.join(MODELS_DIR, 'sync'), path.join(MODELS_DIR, 'async')]
+    .filter((d) => fs.existsSync(d));
+  const pattern = /^global-model-(round|version)-(\d+)\.json$/;
 
   const models = [];
-  for (const file of modelFiles) {
-    const content = fs.readFileSync(path.join(MODELS_DIR, file), 'utf8');
-    models.push(JSON.parse(content));
+  for (const dir of dirs) {
+    const files = fs.readdirSync(dir);
+    for (const file of files) {
+      const m = file.match(pattern);
+      if (!m) continue;
+      const index = Number(m[2]);
+      const content = fs.readFileSync(path.join(dir, file), 'utf8');
+      const model = JSON.parse(content);
+      if (!Number.isInteger(model.round) || model.round <= 0) {
+        model.round = index;
+      }
+      if (!Number.isInteger(model.version) || model.version <= 0) {
+        model.version = index;
+      }
+      models.push(model);
+    }
   }
 
   models.sort((a, b) => a.round - b.round);
@@ -573,30 +587,36 @@ function generateClassificationHTML(models, latestModel, participation, evals, d
     };
 
     ${hasEvals ? `
-    // Accuracy & Loss chart (evaluated rounds only)
+    // Accuracy & Loss chart (evaluated rounds only) - single axis for stability
     new Chart(document.getElementById('metricsChart'), {
       type: 'line',
       data: {
         labels: ${JSON.stringify(evalRounds)},
         datasets: [
           { label: 'Accuracy (%)', data: ${JSON.stringify(evalAccuracy)},
-            borderColor: C.teal,   backgroundColor: 'rgba(78,205,196,0.12)',  tension: 0.3, fill: true, yAxisID: 'yAcc' },
+            borderColor: C.teal,   backgroundColor: 'rgba(78,205,196,0.12)',  tension: 0.3, fill: true, borderWidth: 2 },
           { label: 'Loss',         data: ${JSON.stringify(evalLoss)},
-            borderColor: C.yellow, backgroundColor: 'rgba(255,209,102,0.08)', tension: 0.3, fill: false, yAxisID: 'yLoss' }
+            borderColor: C.yellow, backgroundColor: 'rgba(255,209,102,0.08)', tension: 0.3, fill: false, borderWidth: 2 }
         ]
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: '#eaf0ff' } } },
+        plugins: { legend: { labels: { color: '#eaf0ff' }, display: true } },
         scales: {
-          x:     { title: { display: true, text: 'Round',        color: '#9fb0d9' }, grid: { color: C.grid }, ticks: { color: '#9fb0d9' } },
-          yAcc:  { type: 'linear', position: 'left',
-                   title: { display: true, text: 'Accuracy (%)', color: '#9fb0d9' },
-                   grid: { color: C.grid }, ticks: { color: '#9fb0d9' },
-                   min: Math.max(0, ${Math.min(...evalAccuracy.filter(v=>v!=null))} - 5), max: 100 },
-          yLoss: { type: 'linear', position: 'right',
-                   title: { display: true, text: 'Loss',         color: '#9fb0d9' },
-                   grid: { display: false }, ticks: { color: '#9fb0d9' } }
+          x: {
+            title: { display: true, text: 'Round', color: '#9fb0d9', font: { size: 12 } },
+            grid: { color: C.grid },
+            ticks: { color: '#9fb0d9' }
+          },
+          y: {
+            type: 'linear',
+            position: 'left',
+            title: { display: true, text: 'Accuracy (%) / Loss', color: '#9fb0d9', font: { size: 12 } },
+            grid: { color: C.grid },
+            ticks: { color: '#9fb0d9' },
+            min: 0,
+            max: 100
+          }
         }
       }
     });` : '/* no evaluation data */'}
@@ -626,27 +646,32 @@ function generateClassificationHTML(models, latestModel, participation, evals, d
       }
     });` : ''}
 
+    // Participation chart - single axis (showing Train Samples only) for stability
     new Chart(document.getElementById('participationChart'), {
       type: 'bar',
       data: {
         labels: ${JSON.stringify(participation.rounds)},
         datasets: [
-          { label: 'Participants',  data: ${JSON.stringify(participation.participants)},
-            backgroundColor: 'rgba(255,107,107,0.7)', borderColor: C.red,  borderWidth: 1, yAxisID: 'y'  },
           { label: 'Train Samples', data: ${JSON.stringify(participation.samples)},
-            backgroundColor: 'rgba(159,176,217,0.7)', borderColor: C.blue, borderWidth: 1, yAxisID: 'y1' }
+            backgroundColor: 'rgba(159,176,217,0.7)', borderColor: C.blue, borderWidth: 1 }
         ]
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: '#eaf0ff' } } },
+        plugins: { legend: { labels: { color: '#eaf0ff' }, display: true } },
         scales: {
-          x:  { title: { display: true, text: 'Round',        color: '#9fb0d9' }, grid: { color: C.grid }, ticks: { color: '#9fb0d9' } },
-          y:  { type: 'linear', position: 'left',  title: { display: true, text: 'Participants', color: '#9fb0d9' },
-                grid: { color: C.grid }, ticks: { color: '#9fb0d9', stepSize: 1, precision: 0,
-                  callback: v => Number.isInteger(v) ? v : undefined } },
-          y1: { type: 'linear', position: 'right', title: { display: true, text: 'Samples',      color: '#9fb0d9' },
-                grid: { display: false }, ticks: { color: '#9fb0d9' } }
+          x: {
+            title: { display: true, text: 'Round', color: '#9fb0d9', font: { size: 12 } },
+            grid: { color: C.grid },
+            ticks: { color: '#9fb0d9' }
+          },
+          y: {
+            type: 'linear',
+            position: 'left',
+            title: { display: true, text: 'Train Samples', color: '#9fb0d9', font: { size: 12 } },
+            grid: { color: C.grid },
+            ticks: { color: '#9fb0d9' }
+          }
         }
       }
     });

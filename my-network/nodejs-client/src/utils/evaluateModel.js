@@ -54,9 +54,7 @@ function resolveDatasets(datasetArg) {
   // No dataset argument: evaluate every dataset that has saved model rounds.
   const modelRoot = path.join(__dirname, '..', '..', 'models');
   const datasetsWithModels = available.filter((dataset) => {
-    const modelsDir = path.join(modelRoot, dataset);
-    if (!fs.existsSync(modelsDir)) return false;
-    return fs.readdirSync(modelsDir).some((f) => /^global-model-round-\d+\.json$/.test(f));
+    return listModelEntries(dataset).length > 0;
   });
 
   if (datasetsWithModels.length === 0) {
@@ -66,8 +64,37 @@ function resolveDatasets(datasetArg) {
   return datasetsWithModels;
 }
 
+function listModelEntries(dataset) {
+  const datasetDir = path.join(__dirname, '..', '..', 'models', dataset);
+  if (!fs.existsSync(datasetDir)) {
+    return [];
+  }
+
+  const dirs = [datasetDir, path.join(datasetDir, 'sync'), path.join(datasetDir, 'async')]
+    .filter((d) => fs.existsSync(d));
+
+  const entries = [];
+  const pattern = /^global-model-(round|version)-(\d+)\.json$/;
+
+  for (const dir of dirs) {
+    for (const f of fs.readdirSync(dir)) {
+      const m = f.match(pattern);
+      if (!m) continue;
+      entries.push({
+        filePath: path.join(dir, f),
+        kind: m[1],
+        id: Number(m[2]),
+      });
+    }
+  }
+
+  entries.sort((a, b) => a.id - b.id);
+  return entries;
+}
+
 function resolveModelFiles(dataset, roundArg) {
   const modelsDir = path.join(__dirname, '..', '..', 'models', dataset);
+  const entries = listModelEntries(dataset);
 
   if (!fs.existsSync(modelsDir)) {
     throw new Error(`Models directory not found: ${modelsDir}`);
@@ -75,41 +102,43 @@ function resolveModelFiles(dataset, roundArg) {
 
   // If round is omitted or explicitly set to "all", evaluate all saved rounds.
   if (!roundArg || roundArg === 'all') {
-    const roundFiles = fs
-      .readdirSync(modelsDir)
-      .filter((f) => /^global-model-round-\d+\.json$/.test(f))
-      .sort((a, b) => {
-        const ra = Number(a.match(/\d+/)[0]);
-        const rb = Number(b.match(/\d+/)[0]);
-        return ra - rb;
-      })
-      .map((f) => path.join(modelsDir, f));
+    const files = entries.map((e) => e.filePath);
 
-    if (roundFiles.length === 0) {
-      throw new Error(`No round model files found in: ${modelsDir}`);
+    if (files.length === 0) {
+      throw new Error(`No model files found in: ${modelsDir} (expected round/version files in root/sync/async)`);
     }
 
-    return roundFiles;
+    return files;
   }
 
   if (roundArg === 'latest') {
-    const latestPath = path.join(modelsDir, 'global-model-latest.json');
-    if (!fs.existsSync(latestPath)) {
-      throw new Error(`Latest model file not found: ${latestPath}`);
+    const latestCandidates = [
+      path.join(modelsDir, 'global-model-latest.json'),
+      path.join(modelsDir, 'sync', 'global-model-latest.json'),
+      path.join(modelsDir, 'async', 'global-model-latest.json'),
+    ].filter((p) => fs.existsSync(p));
+
+    if (latestCandidates.length > 0) {
+      return [latestCandidates[0]];
     }
-    return [latestPath];
+
+    if (entries.length === 0) {
+      throw new Error(`Latest model file not found under: ${modelsDir}`);
+    }
+
+    return [entries[entries.length - 1].filePath];
   }
 
-  const round = Number(roundArg);
-  if (!Number.isInteger(round) || round <= 0) {
-    throw new Error(`Invalid round: ${roundArg}. Use positive integer, 'latest', or 'all'.`);
+  const roundOrVersion = Number(roundArg);
+  if (!Number.isInteger(roundOrVersion) || roundOrVersion <= 0) {
+    throw new Error(`Invalid round/version: ${roundArg}. Use positive integer, 'latest', or 'all'.`);
   }
 
-  const roundPath = path.join(modelsDir, `global-model-round-${round}.json`);
-  if (!fs.existsSync(roundPath)) {
-    throw new Error(`Model file not found: ${roundPath}`);
+  const match = entries.find((e) => e.id === roundOrVersion);
+  if (!match) {
+    throw new Error(`Model file not found for round/version ${roundOrVersion} under: ${modelsDir}`);
   }
-  return [roundPath];
+  return [match.filePath];
 }
 
 function loadModelRecord(modelPath) {

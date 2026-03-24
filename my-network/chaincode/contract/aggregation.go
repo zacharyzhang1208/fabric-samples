@@ -16,12 +16,13 @@ type AggregationContract struct {
 
 // ModelUpdate represents a local model update from a participant
 type ModelUpdate struct {
-	OrgID       string `json:"orgId"`       // Organization identifier
-	Round       int    `json:"round"`       // Training round number (for sync mode)
-	Version     int    `json:"version"`     // Model version (for async mode)
-	UpdateData  string `json:"updateData"`  // Serialized model update (gradients/weights)
-	SampleCount int    `json:"sampleCount"` // Number of local samples used
-	Timestamp   int64  `json:"timestamp"`   // Unix timestamp
+	OrgID           string `json:"orgId"`           // Organization identifier
+	Round           int    `json:"round"`           // Training round number (for sync mode)
+	Version         int    `json:"version"`         // Model version (for async mode)
+	UpdateData      string `json:"updateData"`      // Serialized model update (gradients/weights)
+	SampleCount     int    `json:"sampleCount"`     // Number of local samples used
+	BaselineVersion int    `json:"baselineVersion"` // Global model version used as baseline for this update (for async staleness tracking)
+	Timestamp       int64  `json:"timestamp"`       // Unix timestamp
 }
 
 // GlobalModel represents the aggregated global model
@@ -827,10 +828,11 @@ func (a *AggregationContract) aggregateSync(ctx contractapi.TransactionContextIn
 // ASYNCHRONOUS FL METHODS
 // ============================================================================
 
-// SubmitLocalUpdateAsync submits local update in asynchronous mode
+// SubmitLocalUpdateAsync submits local update in asynchronous mode with staleness tracking
 // Immediately triggers aggregation without waiting for other participants
+// baselineVersion indicates which global model version this update was based on (for staleness weighting)
 func (a *AggregationContract) SubmitLocalUpdateAsync(ctx contractapi.TransactionContextInterface,
-	collection string, updateData string, sampleCount int) error {
+	collection string, updateData string, sampleCount int, baselineVersion int) error {
 
 	// Get caller's organization ID
 	clientMSPID, err := ctx.GetClientIdentity().GetMSPID()
@@ -864,12 +866,13 @@ func (a *AggregationContract) SubmitLocalUpdateAsync(ctx contractapi.Transaction
 	}
 
 	update := ModelUpdate{
-		OrgID:       clientMSPID,
-		Round:       0, // Not used in async mode
-		Version:     nextVersion,
-		UpdateData:  updateData,
-		SampleCount: sampleCount,
-		Timestamp:   txTimestamp.Seconds,
+		OrgID:           clientMSPID,
+		Round:           0, // Not used in async mode
+		Version:         nextVersion,
+		UpdateData:      updateData,
+		SampleCount:     sampleCount,
+		BaselineVersion: baselineVersion,
+		Timestamp:       txTimestamp.Seconds,
 	}
 
 	updateJSON, err := json.Marshal(update)
@@ -892,13 +895,15 @@ func (a *AggregationContract) SubmitLocalUpdateAsync(ctx contractapi.Transaction
 	}
 
 	// Immediately trigger aggregation
-	return a.aggregateAsync(ctx, nextVersion, clientMSPID, updateData, sampleCount)
+	return a.aggregateAsync(ctx, nextVersion, clientMSPID, updateData, sampleCount, baselineVersion)
 }
 
-// aggregateAsync performs asynchronous aggregation
+// aggregateAsync performs asynchronous aggregation with staleness weighting
 // Each update creates a new model version
+// Staleness is calculated as: staleness = currentVersion - baselineVersion
+// Staleness weight: staleWeight = 1.0 / (1.0 + staleness), reducing older updates' influence
 func (a *AggregationContract) aggregateAsync(ctx contractapi.TransactionContextInterface,
-	version int, orgID string, updateData string, sampleCount int) error {
+	version int, orgID string, updateData string, sampleCount int, baselineVersion int) error {
 	if sampleCount <= 0 {
 		return fmt.Errorf("sampleCount must be > 0")
 	}
@@ -908,9 +913,21 @@ func (a *AggregationContract) aggregateAsync(ctx contractapi.TransactionContextI
 		return fmt.Errorf("invalid updateData: %v", err)
 	}
 
+	// Calculate staleness: how many versions old is this update
+	staleness := version - 1 - baselineVersion
+	if staleness < 0 {
+		staleness = 0 // Future version shouldn't happen, treat as current
+	}
+
+	// Staleness weight: older updates contribute less
+	// staleWeight = 1.0 / (1.0 + staleness)
+	// e.g., staleness=0 -> weight=1.0, staleness=1 -> weight=0.5, staleness=2 -> weight=0.33
+	staleWeight := 1.0 / (1.0 + float64(staleness))
+	weightedSampleCount := float64(sampleCount) * staleWeight
+
 	prevVersion := version - 1
 	prevWeights := []float64{}
-	prevSamples := 0
+	prevSamples := 0.0
 	if prevVersion > 0 {
 		prevModel, err := a.GetGlobalModelByVersion(ctx, prevVersion)
 		if err != nil {
@@ -921,7 +938,7 @@ func (a *AggregationContract) aggregateAsync(ctx contractapi.TransactionContextI
 		if err != nil {
 			return fmt.Errorf("invalid previous model weights: %v", err)
 		}
-		prevSamples = prevModel.TotalSamples
+		prevSamples = float64(prevModel.TotalSamples)
 
 		if len(prevWeights) != len(newWeights) {
 			return fmt.Errorf("weight dimension mismatch between v%d and incoming update", prevVersion)
@@ -929,12 +946,18 @@ func (a *AggregationContract) aggregateAsync(ctx contractapi.TransactionContextI
 	}
 
 	merged := make([]float64, len(newWeights))
-	totalSamples := prevSamples + sampleCount
+	totalSamples := prevSamples + weightedSampleCount
 	if totalSamples <= 0 {
 		return fmt.Errorf("totalSamples must be > 0")
 	}
-	for i := range newWeights {
-		merged[i] = (prevWeights[i]*float64(prevSamples) + newWeights[i]*float64(sampleCount)) / float64(totalSamples)
+	if prevVersion <= 0 {
+		for i := range newWeights {
+			merged[i] = newWeights[i]
+		}
+	} else {
+		for i := range newWeights {
+			merged[i] = (prevWeights[i]*prevSamples + newWeights[i]*weightedSampleCount) / totalSamples
+		}
 	}
 
 	modelData, err := json.Marshal(merged)
@@ -951,7 +974,7 @@ func (a *AggregationContract) aggregateAsync(ctx contractapi.TransactionContextI
 		Round:        0, // Not used in async mode
 		Version:      version,
 		ModelData:    string(modelData),
-		TotalSamples: totalSamples,
+		TotalSamples: int(totalSamples),
 		Participants: []string{orgID}, // Single participant in async
 		Timestamp:    txTimestamp.Seconds,
 	}

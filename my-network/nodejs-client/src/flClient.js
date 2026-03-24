@@ -263,12 +263,13 @@ function buildClientFabricClient(options) {
       return JSON.parse(result.toString());
     }
 
-    async submitLocalUpdateAsync(collection, weightsJson, sampleCount) {
+    async submitLocalUpdateAsync(collection, weightsJson, sampleCount, baselineVersion = 0) {
       return this.submit(
         'AggregationContract:SubmitLocalUpdateAsync',
         collection,
         weightsJson,
-        sampleCount
+        sampleCount,
+        baselineVersion
       );
     }
 
@@ -329,6 +330,11 @@ class FlClient {
     this.localData = null;
     this.mode = options.mode || 'sync';
     this.dataLoader = null;
+    
+    // Async mode specific fields
+    this.currentBaselineVersion = 0;  // Track which global model version we're based on
+    this.latestAvailableVersion = 0; // Latest version fetched from chain
+    this.asyncStepCount = 0;          // Steps taken in async mode (not round-based)
     this.timingRoot = process.env.FL_TIMING_ROOT || path.join(this.projectRoot, 'nodejs-client', 'reports', 'timing', 'adhoc');
     this.runId = process.env.FL_TIMING_RUN_ID || 'adhoc';
     this.timingFilePath = path.join(this.timingRoot, 'clients', `${this.clientId}.json`);
@@ -712,10 +718,15 @@ class FlClient {
       } else {
         await this.withRetry(
           'SubmitLocalUpdateAsync',
-          () => this.fabricClient.submitLocalUpdateAsync(collection, value, this.localData.sampleCount),
+          () => this.fabricClient.submitLocalUpdateAsync(
+            collection, 
+            value, 
+            this.localData.sampleCount,
+            this.currentBaselineVersion || 0  // Pass current baseline version for staleness tracking
+          ),
           { attempts: 8, initialDelayMs: 200, reconnectOnConnectionError: true }
         );
-        console.log(`[${this.clientId}] Submitted ASYNC update`);
+        console.log(`[${this.clientId}] Submitted ASYNC update (baselineVersion=${this.currentBaselineVersion || 0})`);
       }
       return true;
     } catch (err) {
@@ -890,21 +901,33 @@ class FlClient {
     }
   }
 
-  saveGlobalModelToFile(globalModel, round) {
+  saveGlobalModelToFile(globalModel, index) {
     try {
-      const modelsDir = path.join(this.projectRoot, 'nodejs-client', 'models', this.dataset);
+      const modelsDir = path.join(this.projectRoot, 'nodejs-client', 'models', this.dataset, this.mode);
       
       // Ensure models directory exists
       if (!fs.existsSync(modelsDir)) {
         fs.mkdirSync(modelsDir, { recursive: true });
       }
       
-      const filename = `global-model-round-${round}.json`;
+      const isAsync = this.mode === 'async';
+      const effectiveVersion = Number.isInteger(globalModel.version) && globalModel.version > 0
+        ? globalModel.version
+        : index;
+      const effectiveRound = Number.isInteger(globalModel.round) && globalModel.round > 0
+        ? globalModel.round
+        : index;
+
+      const filename = isAsync
+        ? `global-model-version-${effectiveVersion}.json`
+        : `global-model-round-${effectiveRound}.json`;
       const filepath = path.join(modelsDir, filename);
       
       // Save the complete global model object
       const modelToSave = {
-        round: globalModel.round,
+        mode: this.mode,
+        round: effectiveRound,
+        version: effectiveVersion,
         timestamp: globalModel.timestamp,
         modelData: globalModel.modelData,
         participants: globalModel.participants || [],
@@ -913,7 +936,7 @@ class FlClient {
       };
       
       fs.writeFileSync(filepath, JSON.stringify(modelToSave, null, 2));
-      console.log(`[${this.clientId}] Global model saved to models/${this.dataset}/${filename}`);
+      console.log(`[${this.clientId}] Global model saved to models/${this.dataset}/${this.mode}/${filename}`);
       
       // Also save as "latest" for easy access
       const latestPath = path.join(modelsDir, 'global-model-latest.json');
@@ -942,6 +965,113 @@ class FlClient {
       await this.fabricClient.disconnect();
     }
     console.log(`[${this.clientId}] Cleaned up`);
+  }
+
+  // ========== ASYNCHRONOUS TRAINING LOOP ==========
+  // Non-blocking, bounded async: train continuously, submit updates regularly, fetch latest model periodically
+  async trainAsync(totalSteps) {
+    const pollIntervalMs = 2000;  // Poll for new version every 2s
+    const stepsPerUpdate = 1;      // Submit after every local training step
+
+    let completedStep = 0;
+    let lastSubmitStep = 0;
+    let lastVersionCheckMs = Date.now();
+    
+    console.log(`[${this.clientId}] Starting ASYNC training: ${totalSteps} total steps, model-update every ${stepsPerUpdate} steps`);
+
+    while (completedStep < totalSteps) {
+      const stepTiming = {
+        step: completedStep,
+        startedAt: new Date().toISOString(),
+        startedAtMs: Date.now(),
+        status: 'running',
+      };
+
+      // >>> LOCAL TRAINING STEP
+      let phaseStart = Date.now();
+      try {
+        await this.trainOneEpoch(); // 1 epoch = ~1 local step
+        stepTiming.localTrainMs = Date.now() - phaseStart;
+      } catch (err) {
+        stepTiming.error = err.message;
+        stepTiming.status = 'train-failed';
+        console.error(`[${this.clientId}] Training step ${completedStep} failed:`, err.message);
+        stepTiming.endedAt = new Date().toISOString();
+        stepTiming.endedAtMs = Date.now();
+        stepTiming.totalMs = stepTiming.endedAtMs - stepTiming.startedAtMs;
+        this.timing.rounds.push(stepTiming);
+        break;
+      }
+
+      completedStep += 1;
+      this.asyncStepCount = completedStep;
+
+      // >>> PERIODIC SUBMIT (every N local steps)
+      if (completedStep - lastSubmitStep >= stepsPerUpdate) {
+        phaseStart = Date.now();
+        const submitted = await this.submitUpdateToChain(completedStep); // Use step as version hint
+        stepTiming.submitUpdateMs = Date.now() - phaseStart;
+        if (!submitted) {
+          stepTiming.status = 'submit-failed';
+          console.log(`[${this.clientId}] Async submit failed at step ${completedStep}, stopping`);
+          stepTiming.endedAt = new Date().toISOString();
+          stepTiming.endedAtMs = Date.now();
+          stepTiming.totalMs = stepTiming.endedAtMs - stepTiming.startedAtMs;
+          this.timing.rounds.push(stepTiming);
+          break;
+        }
+        lastSubmitStep = completedStep;
+      }
+
+      // >>> PERIODIC FETCH LATEST MODEL (non-blocking, every 2s of wall clock)
+      const nowMs = Date.now();
+      if (nowMs - lastVersionCheckMs >= pollIntervalMs) {
+        phaseStart = Date.now();
+        try {
+          const latestVersion = await this.fabricClient.getLatestModelVersion();
+          stepTiming.checkVersionMs = Date.now() - phaseStart;
+          
+          if (latestVersion > this.latestAvailableVersion) {
+            this.latestAvailableVersion = latestVersion;
+            
+            // Non-blocking fetch and apply global model
+            phaseStart = Date.now();
+            const globalModel = await this.fabricClient.getGlobalModelByVersion(latestVersion);
+            stepTiming.fetchGlobalModelMs = Date.now() - phaseStart;
+            
+            if (globalModel) {
+              phaseStart = Date.now();
+              this.updateModelFromGlobal(globalModel);
+              this.currentBaselineVersion = latestVersion; // Update baseline for next submissions
+              stepTiming.applyGlobalModelMs = Date.now() - phaseStart;
+              
+              // Save to file
+              phaseStart = Date.now();
+              this.saveGlobalModelToFile(globalModel, latestVersion);
+              stepTiming.saveGlobalModelMs = Date.now() - phaseStart;
+              
+              console.log(`[${this.clientId}] Applied global model v${latestVersion} at step ${completedStep}`);
+            }
+          }
+        } catch (err) {
+          // Non-critical: log but continue training
+          console.warn(`[${this.clientId}] Failed to fetch latest version at step ${completedStep}:`, err.message);
+        }
+        lastVersionCheckMs = nowMs;
+      }
+
+      stepTiming.status = 'completed';
+      stepTiming.endedAt = new Date().toISOString();
+      stepTiming.endedAtMs = Date.now();
+      stepTiming.totalMs = stepTiming.endedAtMs - stepTiming.startedAtMs;
+      this.timing.rounds.push(stepTiming);
+      this.writeTimingSnapshot();
+
+      // Small delay to prevent busy spinning
+      await this.sleep(100);
+    }
+
+    console.log(`[${this.clientId}] ASYNC training completed: ${completedStep} steps`);
   }
 }
 
@@ -1054,42 +1184,48 @@ async function main() {
     const lastCompletedRound = await client.loadLatestGlobalModel();
     client.timing.initialization.loadLatestGlobalModelMs = Date.now() - phaseStart;
     client.timing.initialization.lastCompletedRound = lastCompletedRound;
-    const startRound = lastCompletedRound + 1;
-    const endRound = lastCompletedRound + argv.epochs;
     client.timing.training = {
       requestedEpochs: argv.epochs,
-      startRound,
-      endRound,
+      startRound: lastCompletedRound + 1,
+      endRound: lastCompletedRound + argv.epochs,
       dataset: argv.dataset,
       mode: argv.mode,
     };
     client.writeTimingSnapshot();
     
-    console.log(`\n[${client.clientId}] Starting training from round ${startRound} to ${endRound}`);
+    console.log(`\n[${client.clientId}] Starting ${argv.mode.toUpperCase()} training with ${argv.epochs} rounds`);
 
-    // FL training: each epoch triggers one round of aggregation
-    for (let epoch = 1; epoch <= argv.epochs; epoch++) {
-      const currentRound = lastCompletedRound + epoch;
-      const roundTiming = {
-        epoch,
-        round: currentRound,
-        startedAt: new Date().toISOString(),
-        startedAtMs: Date.now(),
-        status: 'running',
-      };
-      console.log(`\n========== Epoch ${epoch}/${argv.epochs} (Round ${currentRound}) ==========`);
+    // Choose training strategy based on mode
+    if (argv.mode === 'async') {
+      // ASYNC MODE: Non-blocking, bounded async training
+      console.log(`[${client.clientId}] Using asynchronous training loop (no round barrier)`);
+      await client.trainAsync(argv.epochs);
+    } else {
+      // SYNC MODE: Traditional round-based synchronous training (original logic)
+      console.log(`[${client.clientId}] Using synchronous training loop (with round barrier)`);
+      // FL training: each epoch triggers one round of aggregation
+      for (let epoch = 1; epoch <= argv.epochs; epoch++) {
+        const currentRound = lastCompletedRound + epoch;
+        const roundTiming = {
+          epoch,
+          round: currentRound,
+          startedAt: new Date().toISOString(),
+          startedAtMs: Date.now(),
+          status: 'running',
+        };
+        console.log(`\n========== Epoch ${epoch}/${argv.epochs} (Round ${currentRound}) ==========`);
 
-      // Local training for 1 epoch
-      phaseStart = Date.now();
-      await client.trainOneEpoch();
-      roundTiming.localTrainMs = Date.now() - phaseStart;
+        // Local training for 1 epoch
+        phaseStart = Date.now();
+        await client.trainOneEpoch();
+        roundTiming.localTrainMs = Date.now() - phaseStart;
 
-      // Small delay to simulate network latency
-      phaseStart = Date.now();
-      await new Promise((r) => setTimeout(r, 1000));
-      roundTiming.postTrainDelayMs = Date.now() - phaseStart;
+        // Small delay to simulate network latency
+        phaseStart = Date.now();
+        await new Promise((r) => setTimeout(r, 1000));
+        roundTiming.postTrainDelayMs = Date.now() - phaseStart;
 
-      // Submit update to chain (use actual round number)
+        // Submit update to chain (use actual round number)
       phaseStart = Date.now();
       const submitted = await client.submitUpdateToChain(currentRound);
       roundTiming.submitUpdateMs = Date.now() - phaseStart;
@@ -1146,13 +1282,14 @@ async function main() {
       roundTiming.totalMs = roundTiming.endedAtMs - roundTiming.startedAtMs;
       client.timing.rounds.push(roundTiming);
       client.writeTimingSnapshot();
-    }
+      }
 
-    client.timing.training.completedRounds = completedRounds;
-    if (failedRound !== null) {
-      client.timing.training.failedRound = failedRound;
+      client.timing.training.completedRounds = completedRounds;
+      if (failedRound !== null) {
+        client.timing.training.failedRound = failedRound;
+      }
+      console.log(`\n[${client.clientId}] All epochs completed (${argv.epochs} FL rounds)`);
     }
-    console.log(`\n[${client.clientId}] All epochs completed (${argv.epochs} FL rounds)`);
   } catch (err) {
     fatalError = err;
     client.timing.error = {

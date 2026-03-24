@@ -209,7 +209,28 @@ async function main() {
   );
 
   console.log(`\n[LAUNCHER] All clients completed`);
-  
+ 
+  // Generate evaluation files first so report can include metrics trends.
+  console.log(`\n[LAUNCHER] Evaluating saved global models...`);
+  const evaluateStartedAtMs = Date.now();
+  const evaluateScript = path.join(__dirname, 'utils', 'evaluateModel.js');
+  const evaluateArgs = [evaluateScript, dataset, 'all'];
+  if (dataset === 'mnist') {
+    evaluateArgs.push(String(mnistSamples));
+  }
+  const evaluateProc = spawn('node', evaluateArgs, {
+    stdio: 'inherit',
+    cwd: path.join(__dirname, '..'),
+  });
+  const evaluateExitCode = await new Promise((resolve) => {
+    evaluateProc.on('exit', (code) => resolve(code ?? 1));
+  });
+  const evaluateEndedAtMs = Date.now();
+
+  if (evaluateExitCode !== 0) {
+    console.warn(`[LAUNCHER] Model evaluation exited with code ${evaluateExitCode}. Report may have partial metrics.`);
+  }
+
   // Generate training report
   console.log(`\n[LAUNCHER] Generating training report...`);
   const reportStartedAtMs = Date.now();
@@ -218,10 +239,15 @@ async function main() {
     stdio: 'inherit',
     cwd: path.join(__dirname, '..'),
   });
-  
-  await new Promise((resolve) => {
-    reportProc.on('exit', resolve);
+
+  const reportExitCode = await new Promise((resolve) => {
+    reportProc.on('exit', (code) => resolve(code ?? 1));
   });
+  const reportEndedAtMs = Date.now();
+
+  if (reportExitCode !== 0) {
+    console.warn(`[LAUNCHER] Report generation exited with code ${reportExitCode}.`);
+  }
 
   const clientTimings = CLIENTS.map((config) => {
     const clientId = `${config.org}-N${config.node}`;
@@ -251,7 +277,10 @@ async function main() {
     endedAt: new Date(runEndedAtMs).toISOString(),
     endedAtMs: runEndedAtMs,
     totalMs: runEndedAtMs - runStartedAtMs,
-    reportGenerationMs: runEndedAtMs - reportStartedAtMs,
+    evaluationMs: evaluateEndedAtMs - evaluateStartedAtMs,
+    reportGenerationMs: reportEndedAtMs - reportStartedAtMs,
+    evaluateExitCode,
+    reportExitCode,
     status: 'completed',
     childExitCodes,
     roundTotalMs: summarizeDurations(roundDurations),

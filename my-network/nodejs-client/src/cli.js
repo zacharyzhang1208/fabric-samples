@@ -55,17 +55,18 @@ yargs(hideBin(process.argv))
     }
   )
   .command(
-    'fl-submit-async <collection> <weightsJson> <sampleCount>',
+    'fl-submit-async <collection> <weightsJson> <sampleCount> [baselineVersion]',
     'Submit local model update in asynchronous FL mode',
     (cmd) => {
       cmd
         .positional('collection', { type: 'string', describe: 'PDC collection name' })
         .positional('weightsJson', { type: 'string', describe: 'JSON weights, e.g. [0.1,0.2]' })
-        .positional('sampleCount', { type: 'number', describe: 'Local sample count' });
+        .positional('sampleCount', { type: 'number', describe: 'Local sample count' })
+        .positional('baselineVersion', { type: 'number', default: 0, describe: 'Baseline global model version' });
     },
     async (argv) => {
       await withClient(async (client) => {
-        await client.submitLocalUpdateAsync(argv.collection, argv.weightsJson, argv.sampleCount);
+        await client.submitLocalUpdateAsync(argv.collection, argv.weightsJson, argv.sampleCount, argv.baselineVersion);
         console.log('ASYNC update submitted');
       });
     }
