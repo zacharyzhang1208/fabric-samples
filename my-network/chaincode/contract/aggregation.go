@@ -3,6 +3,7 @@ package contract
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/hyperledger/fabric-contract-api-go/v2/contractapi"
@@ -52,6 +53,31 @@ type OrgRoundStatus struct {
 	SubmittedNodeIDs []string `json:"submittedNodeIds"`
 	AggregationDone  bool     `json:"aggregationDone"`
 	Timestamp        int64    `json:"timestamp"`
+}
+
+type AsyncSubmitResult struct {
+	TxID      string `json:"txId"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+type AsyncPendingUpdate struct {
+	TxID            string `json:"txId"`
+	PublicKey       string `json:"publicKey"`
+	OrgID           string `json:"orgId"`
+	SampleCount     int    `json:"sampleCount"`
+	BaselineVersion int    `json:"baselineVersion"`
+	Timestamp       int64  `json:"timestamp"`
+}
+
+type AsyncUpdatePayload struct {
+	TxID       string `json:"txId"`
+	UpdateData string `json:"updateData"`
+}
+
+type AsyncAggregationResult struct {
+	Version         int   `json:"version"`
+	AggregatedCount int   `json:"aggregatedCount"`
+	Timestamp       int64 `json:"timestamp"`
 }
 
 // ============================================================================
@@ -828,19 +854,119 @@ func (a *AggregationContract) aggregateSync(ctx contractapi.TransactionContextIn
 // ASYNCHRONOUS FL METHODS
 // ============================================================================
 
-// SubmitLocalUpdateAsync submits local update in asynchronous mode with staleness tracking
-// Immediately triggers aggregation without waiting for other participants
-// baselineVersion indicates which global model version this update was based on (for staleness weighting)
-func (a *AggregationContract) SubmitLocalUpdateAsync(ctx contractapi.TransactionContextInterface,
-	collection string, updateData string, sampleCount int, baselineVersion int) error {
+const defaultAsyncBatchSize = 5
 
-	// Get caller's organization ID
-	clientMSPID, err := ctx.GetClientIdentity().GetMSPID()
+const (
+	asyncUpdateMetaPrefix     = "async_update_meta_"
+	asyncUpdatePayloadPrefix  = "async_update_payload_"
+	asyncConsumedPrefix       = "async_consumed_"
+	asyncUpdateSubmittedEvent = "async_update_submitted"
+	asyncModelAggregatedEvent = "async_model_aggregated"
+)
+
+func asyncUpdateMetaKey(txID string) string {
+	return fmt.Sprintf("%s%s", asyncUpdateMetaPrefix, txID)
+}
+
+func asyncUpdatePayloadKey(txID string) string {
+	return fmt.Sprintf("%s%s", asyncUpdatePayloadPrefix, txID)
+}
+
+func asyncPrivateUpdateKey(txID string) string {
+	return fmt.Sprintf("update_async_%s", txID)
+}
+
+func asyncConsumedKey(txID string) string {
+	return fmt.Sprintf("%s%s", asyncConsumedPrefix, txID)
+}
+
+func (a *AggregationContract) getAsyncUpdatePayload(
+	ctx contractapi.TransactionContextInterface,
+	txID string,
+) (*AsyncUpdatePayload, error) {
+	payloadJSON, err := ctx.GetStub().GetState(asyncUpdatePayloadKey(txID))
 	if err != nil {
-		return fmt.Errorf("failed to get client MSP ID: %v", err)
+		return nil, fmt.Errorf("failed to read async update payload %s: %v", txID, err)
+	}
+	if payloadJSON != nil {
+		var payload AsyncUpdatePayload
+		if err := json.Unmarshal(payloadJSON, &payload); err != nil {
+			return nil, fmt.Errorf("failed to parse async update payload %s: %v", txID, err)
+		}
+		return &payload, nil
+	}
+	return nil, fmt.Errorf("async update payload %s not found", txID)
+}
+
+func (a *AggregationContract) listPendingAsyncUpdates(
+	ctx contractapi.TransactionContextInterface,
+	limit int,
+) ([]AsyncPendingUpdate, error) {
+	iterator, err := ctx.GetStub().GetStateByRange(asyncUpdateMetaPrefix, asyncUpdateMetaPrefix+"~")
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan pending async updates: %v", err)
+	}
+	defer iterator.Close()
+
+	updates := make([]AsyncPendingUpdate, 0)
+	for iterator.HasNext() {
+		entry, err := iterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read pending async update entry: %v", err)
+		}
+
+		txID := strings.TrimPrefix(entry.Key, asyncUpdateMetaPrefix)
+		consumed, err := ctx.GetStub().GetState(asyncConsumedKey(txID))
+		if err != nil {
+			return nil, fmt.Errorf("failed to read async consumed marker for %s: %v", txID, err)
+		}
+		if consumed != nil {
+			continue
+		}
+
+		var update AsyncPendingUpdate
+		if err := json.Unmarshal(entry.Value, &update); err != nil {
+			return nil, fmt.Errorf("failed to parse async update metadata %s: %v", txID, err)
+		}
+		update.TxID = txID
+		update.PublicKey = entry.Key
+		updates = append(updates, update)
 	}
 
-	// Validate collection
+	sort.Slice(updates, func(i, j int) bool {
+		if updates[i].Timestamp == updates[j].Timestamp {
+			return updates[i].TxID < updates[j].TxID
+		}
+		return updates[i].Timestamp < updates[j].Timestamp
+	})
+
+	if limit > 0 && len(updates) > limit {
+		updates = updates[:limit]
+	}
+	return updates, nil
+}
+
+// GetPendingAsyncUpdates returns earliest pending async updates by timestamp.
+func (a *AggregationContract) GetPendingAsyncUpdates(
+	ctx contractapi.TransactionContextInterface,
+	limit int,
+) ([]AsyncPendingUpdate, error) {
+	return a.listPendingAsyncUpdates(ctx, limit)
+}
+
+// SubmitLocalUpdateAsync stores an async update by txid and emits a lightweight submit event.
+func (a *AggregationContract) SubmitLocalUpdateAsync(
+	ctx contractapi.TransactionContextInterface,
+	collection string,
+	updateData string,
+	sampleCount int,
+	baselineVersion int,
+) (string, error) {
+	clientMSPID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return "", fmt.Errorf("failed to get client MSP ID: %v", err)
+	}
+
 	validCollections := map[string]string{
 		"Org1MSP": CollectionVPSAOrg1Shards,
 		"Org2MSP": CollectionVPSAOrg2Shards,
@@ -848,27 +974,18 @@ func (a *AggregationContract) SubmitLocalUpdateAsync(ctx contractapi.Transaction
 
 	expectedCollection, ok := validCollections[clientMSPID]
 	if !ok || collection != expectedCollection {
-		return fmt.Errorf("invalid collection for organization %s", clientMSPID)
+		return "", fmt.Errorf("invalid collection for organization %s", clientMSPID)
 	}
 
-	// Get current global model version
-	currentVersion, err := a.GetLatestModelVersion(ctx)
-	if err != nil {
-		currentVersion = 0 // Start from version 0
-	}
-
-	nextVersion := currentVersion + 1
-
-	// Create model update
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
-		return fmt.Errorf("failed to get timestamp: %v", err)
+		return "", fmt.Errorf("failed to get timestamp: %v", err)
 	}
 
 	update := ModelUpdate{
 		OrgID:           clientMSPID,
-		Round:           0, // Not used in async mode
-		Version:         nextVersion,
+		Round:           0,
+		Version:         0,
 		UpdateData:      updateData,
 		SampleCount:     sampleCount,
 		BaselineVersion: baselineVersion,
@@ -877,126 +994,258 @@ func (a *AggregationContract) SubmitLocalUpdateAsync(ctx contractapi.Transaction
 
 	updateJSON, err := json.Marshal(update)
 	if err != nil {
-		return fmt.Errorf("failed to marshal update: %v", err)
+		return "", fmt.Errorf("failed to marshal update: %v", err)
 	}
 
-	// Store in PDC
-	key := fmt.Sprintf("update_async_%d_%s", nextVersion, clientMSPID)
-	err = ctx.GetStub().PutPrivateData(collection, key, updateJSON)
+	txID := ctx.GetStub().GetTxID()
+	if err := ctx.GetStub().PutPrivateData(collection, asyncPrivateUpdateKey(txID), updateJSON); err != nil {
+		return "", pdcWriteError(collection, err)
+	}
+	meta := AsyncPendingUpdate{
+		TxID:            txID,
+		PublicKey:       asyncUpdateMetaKey(txID),
+		OrgID:           update.OrgID,
+		SampleCount:     update.SampleCount,
+		BaselineVersion: update.BaselineVersion,
+		Timestamp:       update.Timestamp,
+	}
+	metaJSON, err := json.Marshal(meta)
 	if err != nil {
-		return pdcWriteError(collection, err)
+		return "", fmt.Errorf("failed to marshal async update metadata: %v", err)
 	}
-
-	// Store an aggregation-safe public record for runnable FedAvg demo.
-	publicKey := fmt.Sprintf("update_public_version_%d_%s", nextVersion, clientMSPID)
-	err = ctx.GetStub().PutState(publicKey, updateJSON)
+	payload := AsyncUpdatePayload{
+		TxID:       txID,
+		UpdateData: update.UpdateData,
+	}
+	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to store public update record: %v", err)
+		return "", fmt.Errorf("failed to marshal async update payload: %v", err)
+	}
+	if err := ctx.GetStub().PutState(asyncUpdateMetaKey(txID), metaJSON); err != nil {
+		return "", fmt.Errorf("failed to store public async update metadata: %v", err)
+	}
+	if err := ctx.GetStub().PutState(asyncUpdatePayloadKey(txID), payloadJSON); err != nil {
+		return "", fmt.Errorf("failed to store public async update payload: %v", err)
 	}
 
-	// Immediately trigger aggregation
-	return a.aggregateAsync(ctx, nextVersion, clientMSPID, updateData, sampleCount, baselineVersion)
+	result := AsyncSubmitResult{
+		TxID:      txID,
+		Timestamp: txTimestamp.Seconds,
+	}
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal async submit result: %v", err)
+	}
+
+	if err := ctx.GetStub().SetEvent(asyncUpdateSubmittedEvent, resultJSON); err != nil {
+		return "", fmt.Errorf("failed to emit async submit event: %v", err)
+	}
+
+	return string(resultJSON), nil
 }
 
-// aggregateAsync performs asynchronous aggregation with staleness weighting
-// Each update creates a new model version
-// Staleness is calculated as: staleness = currentVersion - baselineVersion
-// Staleness weight: staleWeight = 1.0 / (1.0 + staleness), reducing older updates' influence
-func (a *AggregationContract) aggregateAsync(ctx contractapi.TransactionContextInterface,
-	version int, orgID string, updateData string, sampleCount int, baselineVersion int) error {
-	if sampleCount <= 0 {
-		return fmt.Errorf("sampleCount must be > 0")
+// AggregateAsyncBatch aggregates a caller-specified batch of async txids.
+func (a *AggregationContract) AggregateAsyncBatch(
+	ctx contractapi.TransactionContextInterface,
+	txIDsJSON string,
+	minUpdates int,
+) (string, error) {
+	var txIDs []string
+	if err := json.Unmarshal([]byte(txIDsJSON), &txIDs); err != nil {
+		return "", fmt.Errorf("failed to parse async batch txids: %v", err)
+	}
+	if len(txIDs) == 0 {
+		return "", fmt.Errorf("async batch txids cannot be empty")
 	}
 
-	newWeights, err := parseWeights(updateData)
+	requiredUpdates := defaultAsyncBatchSize
+	if minUpdates > 0 && minUpdates < requiredUpdates {
+		requiredUpdates = minUpdates
+	}
+	if len(txIDs) < requiredUpdates {
+		return "", fmt.Errorf("not enough async updates to aggregate: %d/%d", len(txIDs), requiredUpdates)
+	}
+
+	seen := make(map[string]struct{}, len(txIDs))
+	currentVersion, err := a.GetLatestModelVersion(ctx)
 	if err != nil {
-		return fmt.Errorf("invalid updateData: %v", err)
+		currentVersion = 0
 	}
+	nextVersion := currentVersion + 1
 
-	// Calculate staleness: how many versions old is this update
-	staleness := version - 1 - baselineVersion
-	if staleness < 0 {
-		staleness = 0 // Future version shouldn't happen, treat as current
-	}
-
-	// Staleness weight: older updates contribute less
-	// staleWeight = 1.0 / (1.0 + staleness)
-	// e.g., staleness=0 -> weight=1.0, staleness=1 -> weight=0.5, staleness=2 -> weight=0.33
-	staleWeight := 1.0 / (1.0 + float64(staleness))
-	weightedSampleCount := float64(sampleCount) * staleWeight
-
-	prevVersion := version - 1
 	prevWeights := []float64{}
 	prevSamples := 0.0
-	if prevVersion > 0 {
-		prevModel, err := a.GetGlobalModelByVersion(ctx, prevVersion)
+	if currentVersion > 0 {
+		prevModel, err := a.GetGlobalModelByVersion(ctx, currentVersion)
 		if err != nil {
-			return fmt.Errorf("failed to get previous model v%d: %v", prevVersion, err)
+			return "", fmt.Errorf("failed to get previous model v%d: %v", currentVersion, err)
 		}
 
 		prevWeights, err = parseWeights(prevModel.ModelData)
 		if err != nil {
-			return fmt.Errorf("invalid previous model weights: %v", err)
+			return "", fmt.Errorf("invalid previous model weights: %v", err)
 		}
 		prevSamples = float64(prevModel.TotalSamples)
+	}
 
-		if len(prevWeights) != len(newWeights) {
-			return fmt.Errorf("weight dimension mismatch between v%d and incoming update", prevVersion)
+	var weightedSum []float64
+	if len(prevWeights) > 0 {
+		weightedSum = make([]float64, len(prevWeights))
+		for i := range prevWeights {
+			weightedSum[i] = prevWeights[i] * prevSamples
 		}
 	}
 
-	merged := make([]float64, len(newWeights))
-	totalSamples := prevSamples + weightedSampleCount
+	totalSamples := prevSamples
+	participants := []string{}
+	aggregatedTxIDs := make([]string, 0, len(txIDs))
+
+	for _, txID := range txIDs {
+		if txID == "" {
+			return "", fmt.Errorf("async batch txid cannot be empty")
+		}
+		if _, exists := seen[txID]; exists {
+			return "", fmt.Errorf("duplicate async batch txid: %s", txID)
+		}
+		seen[txID] = struct{}{}
+
+		consumed, err := ctx.GetStub().GetState(asyncConsumedKey(txID))
+		if err != nil {
+			return "", fmt.Errorf("failed to read async consumed marker for %s: %v", txID, err)
+		}
+		if consumed != nil {
+			return "", fmt.Errorf("async update %s already consumed", txID)
+		}
+
+		metaJSON, err := ctx.GetStub().GetState(asyncUpdateMetaKey(txID))
+		if err != nil {
+			return "", fmt.Errorf("failed to read async update metadata %s: %v", txID, err)
+		}
+		if metaJSON == nil {
+			return "", fmt.Errorf("async update metadata %s not found", txID)
+		}
+
+		var updateMeta AsyncPendingUpdate
+		if err := json.Unmarshal(metaJSON, &updateMeta); err != nil {
+			return "", fmt.Errorf("failed to parse async update metadata %s: %v", txID, err)
+		}
+		if updateMeta.SampleCount <= 0 {
+			return "", fmt.Errorf("invalid sampleCount in %s: %d", txID, updateMeta.SampleCount)
+		}
+
+		payload, err := a.getAsyncUpdatePayload(ctx, txID)
+		if err != nil {
+			return "", err
+		}
+
+		newWeights, err := parseWeights(payload.UpdateData)
+		if err != nil {
+			return "", fmt.Errorf("invalid updateData in %s: %v", txID, err)
+		}
+
+		if weightedSum == nil {
+			weightedSum = make([]float64, len(newWeights))
+		}
+		if len(newWeights) != len(weightedSum) {
+			return "", fmt.Errorf("weight dimension mismatch in %s", txID)
+		}
+
+		staleness := currentVersion - updateMeta.BaselineVersion
+		if staleness < 0 {
+			staleness = 0
+		}
+		staleWeight := 1.0 / (1.0 + float64(staleness))
+		weightedSampleCount := float64(updateMeta.SampleCount) * staleWeight
+
+		for i := range newWeights {
+			weightedSum[i] += newWeights[i] * weightedSampleCount
+		}
+		totalSamples += weightedSampleCount
+
+		if !containsString(participants, updateMeta.OrgID) {
+			participants = append(participants, updateMeta.OrgID)
+		}
+		aggregatedTxIDs = append(aggregatedTxIDs, txID)
+	}
+
+	if len(aggregatedTxIDs) < requiredUpdates {
+		return "", fmt.Errorf("not enough async updates to aggregate: %d/%d", len(aggregatedTxIDs), requiredUpdates)
+	}
 	if totalSamples <= 0 {
-		return fmt.Errorf("totalSamples must be > 0")
+		return "", fmt.Errorf("totalSamples must be > 0")
 	}
-	if prevVersion <= 0 {
-		for i := range newWeights {
-			merged[i] = newWeights[i]
-		}
-	} else {
-		for i := range newWeights {
-			merged[i] = (prevWeights[i]*prevSamples + newWeights[i]*weightedSampleCount) / totalSamples
-		}
+
+	merged := make([]float64, len(weightedSum))
+	for i := range weightedSum {
+		merged[i] = weightedSum[i] / totalSamples
 	}
 
 	modelData, err := json.Marshal(merged)
 	if err != nil {
-		return fmt.Errorf("failed to marshal aggregated weights: %v", err)
+		return "", fmt.Errorf("failed to marshal aggregated weights: %v", err)
 	}
 
 	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
 	if err != nil {
-		return fmt.Errorf("failed to get timestamp: %v", err)
+		return "", fmt.Errorf("failed to get timestamp: %v", err)
 	}
 
 	globalModel := GlobalModel{
-		Round:        0, // Not used in async mode
-		Version:      version,
+		Round:        0,
+		Version:      nextVersion,
 		ModelData:    string(modelData),
 		TotalSamples: int(totalSamples),
-		Participants: []string{orgID}, // Single participant in async
+		Participants: participants,
 		Timestamp:    txTimestamp.Seconds,
 	}
 
 	modelJSON, err := json.Marshal(globalModel)
 	if err != nil {
-		return fmt.Errorf("failed to marshal global model: %v", err)
+		return "", fmt.Errorf("failed to marshal global model: %v", err)
 	}
 
-	key := fmt.Sprintf("global_model_version_%d", version)
-	err = ctx.GetStub().PutState(key, modelJSON)
+	key := fmt.Sprintf("global_model_version_%d", nextVersion)
+	if err := ctx.GetStub().PutState(key, modelJSON); err != nil {
+		return "", fmt.Errorf("failed to store global model: %v", err)
+	}
+
+	versionJSON, err := json.Marshal(nextVersion)
 	if err != nil {
-		return fmt.Errorf("failed to store global model: %v", err)
+		return "", fmt.Errorf("failed to marshal version: %v", err)
+	}
+	if err := ctx.GetStub().PutState("latest_model_version", versionJSON); err != nil {
+		return "", err
 	}
 
-	// Update latest version pointer
-	versionJSON, err := json.Marshal(version)
+	consumedMarker := map[string]interface{}{
+		"version":   nextVersion,
+		"timestamp": txTimestamp.Seconds,
+	}
+	consumedJSON, err := json.Marshal(consumedMarker)
 	if err != nil {
-		return fmt.Errorf("failed to marshal version: %v", err)
+		return "", fmt.Errorf("failed to marshal async consumed marker: %v", err)
 	}
 
-	return ctx.GetStub().PutState("latest_model_version", versionJSON)
+	for _, txID := range aggregatedTxIDs {
+		if err := ctx.GetStub().PutState(asyncConsumedKey(txID), consumedJSON); err != nil {
+			return "", fmt.Errorf("failed to store async consumed marker for %s: %v", txID, err)
+		}
+	}
+
+	result := AsyncAggregationResult{
+		Version:         nextVersion,
+		AggregatedCount: len(aggregatedTxIDs),
+		Timestamp:       txTimestamp.Seconds,
+	}
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal async aggregation result: %v", err)
+	}
+	if err := ctx.GetStub().SetEvent(asyncModelAggregatedEvent, resultJSON); err != nil {
+		return "", fmt.Errorf("failed to emit async aggregation event: %v", err)
+	}
+
+	return string(resultJSON), nil
 }
 
 // GetLatestModelVersion returns the latest model version in async mode

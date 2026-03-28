@@ -145,6 +145,7 @@ function buildClientFabricClient(options) {
   class FabricClient {
     constructor() {
       this.gateway = new Gateway();
+      this.network = null;
       this.contract = null;
     }
 
@@ -157,8 +158,8 @@ function buildClientFabricClient(options) {
         discovery: { enabled: true, asLocalhost: true },
       });
 
-      const network = await this.gateway.getNetwork('trainingchannel');
-      this.contract = network.getContract('contracts');
+      this.network = await this.gateway.getNetwork('trainingchannel');
+      this.contract = this.network.getContract('contracts');
     }
 
     async set(key, value) {
@@ -264,13 +265,14 @@ function buildClientFabricClient(options) {
     }
 
     async submitLocalUpdateAsync(collection, weightsJson, sampleCount, baselineVersion = 0) {
-      return this.submit(
+      const result = await this.submit(
         'AggregationContract:SubmitLocalUpdateAsync',
         collection,
         weightsJson,
         sampleCount,
         baselineVersion
       );
+      return JSON.parse(result.toString());
     }
 
     async getGlobalModel(round) {
@@ -285,6 +287,20 @@ function buildClientFabricClient(options) {
 
     async getGlobalModelByVersion(version) {
       const result = await this.evaluate('AggregationContract:GetGlobalModelByVersion', version);
+      return JSON.parse(result.toString());
+    }
+
+    async aggregateAsyncBatch(txIds, minUpdates = 5) {
+      const result = await this.submit(
+        'AggregationContract:AggregateAsyncBatch',
+        JSON.stringify(txIds),
+        minUpdates
+      );
+      return JSON.parse(result.toString());
+    }
+
+    async getPendingAsyncUpdates(limit = 0) {
+      const result = await this.evaluate('AggregationContract:GetPendingAsyncUpdates', limit);
       return JSON.parse(result.toString());
     }
 
@@ -335,6 +351,15 @@ class FlClient {
     this.currentBaselineVersion = 0;  // Track which global model version we're based on
     this.latestAvailableVersion = 0; // Latest version fetched from chain
     this.asyncStepCount = 0;          // Steps taken in async mode (not round-based)
+    this.asyncBatchSize = 5;
+    this.asyncPendingTimeoutMs = 15000;
+    this.asyncCommitteeTakeoverMs = 2500;
+    this.asyncCommitteeMembers = this.buildAsyncCommitteeMembers();
+    this.asyncCommitteeRank = this.asyncCommitteeMembers.indexOf(this.clientId);
+    this.isAsyncCommitteeMember = this.mode === 'async' && this.asyncCommitteeRank >= 0;
+    this.isAsyncCommitteeLeader = this.isAsyncCommitteeMember && this.asyncCommitteeRank === 0;
+    this.asyncAggregationLoopActive = false;
+    this.asyncAggregationLoopPromise = null;
     this.timingRoot = process.env.FL_TIMING_ROOT || path.join(this.projectRoot, 'nodejs-client', 'reports', 'timing', 'adhoc');
     this.runId = process.env.FL_TIMING_RUN_ID || 'adhoc';
     this.timingFilePath = path.join(this.timingRoot, 'clients', `${this.clientId}.json`);
@@ -393,6 +418,9 @@ class FlClient {
       await this.fabricClient.connect();
       await this.verifyFabricReady();
       console.log(`[${this.clientId}] Connected to Fabric (${this.peerName})`);
+      if (this.isAsyncCommitteeMember) {
+        await this.startAsyncCommitteeFlow();
+      }
     } catch (err) {
       console.error(`[${this.clientId}] Failed to connect to Fabric:`, err.message);
       throw err;
@@ -432,6 +460,153 @@ class FlClient {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  buildAsyncCommitteeMembers() {
+    const members = [];
+    for (let i = 1; i <= this.org1NodeCount; i++) {
+      members.push(`A-N${i}`);
+    }
+    for (let i = 1; i <= this.org2NodeCount; i++) {
+      members.push(`B-N${i}`);
+    }
+    return members;
+  }
+
+  async startAsyncCommitteeFlow() {
+    if (!this.isAsyncCommitteeMember || this.asyncAggregationLoopActive) {
+      return;
+    }
+
+    this.asyncAggregationLoopActive = true;
+    this.asyncAggregationLoopPromise = this.runAsyncAggregationLoop();
+    const roleLabel = this.isAsyncCommitteeLeader
+      ? 'async committee leader'
+      : `async committee backup #${this.asyncCommitteeRank}`;
+    console.log(`[${this.clientId}] Acting as ${roleLabel}`);
+  }
+
+  async stopAsyncCommitteeFlow() {
+    this.asyncAggregationLoopActive = false;
+    if (this.asyncAggregationLoopPromise) {
+      try {
+        await this.asyncAggregationLoopPromise;
+      } catch (err) {
+        console.warn(`[${this.clientId}] Async committee loop shutdown warning: ${this.getErrMessage(err)}`);
+      }
+      this.asyncAggregationLoopPromise = null;
+    }
+  }
+
+  async runAsyncAggregationLoop() {
+    while (this.asyncAggregationLoopActive) {
+      try {
+        await this.processAsyncAggregationTick();
+      } catch (err) {
+        console.warn(`[${this.clientId}] Async committee tick skipped: ${this.getErrMessage(err)}`);
+      }
+      await this.sleep(1000);
+    }
+  }
+
+  async processAsyncAggregationTick(options = {}) {
+    const { allowPartial = false } = options;
+    if (!this.fabricClient) {
+      return;
+    }
+
+    const pendingUpdates = await this.fabricClient.getPendingAsyncUpdates(this.asyncBatchSize);
+    const availableCount = Array.isArray(pendingUpdates) ? pendingUpdates.length : 0;
+    const oldestAgeMs =
+      availableCount > 0 && pendingUpdates[0] && pendingUpdates[0].timestamp
+        ? Date.now() - Number(pendingUpdates[0].timestamp) * 1000
+        : 0;
+
+    const fullBatchReady = availableCount >= this.asyncBatchSize;
+    const partialBatchReady =
+      allowPartial && availableCount > 0 && oldestAgeMs >= this.asyncPendingTimeoutMs;
+    if (!fullBatchReady && !partialBatchReady) {
+      return;
+    }
+
+    if (this.asyncCommitteeRank > 0) {
+      await this.sleep(this.asyncCommitteeRank * this.asyncCommitteeTakeoverMs);
+    }
+
+    const targetCount = fullBatchReady ? this.asyncBatchSize : availableCount;
+    const minUpdates = fullBatchReady ? this.asyncBatchSize : 1;
+
+    if (targetCount < minUpdates) {
+      return;
+    }
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const freshPendingUpdates = await this.fabricClient.getPendingAsyncUpdates(targetCount);
+      const txIds = Array.isArray(freshPendingUpdates)
+        ? freshPendingUpdates.slice(0, targetCount).map((entry) => entry.txId)
+        : [];
+
+      if (txIds.length < minUpdates) {
+        return;
+      }
+
+      try {
+        const result = await this.fabricClient.aggregateAsyncBatch(txIds, minUpdates);
+        if (result) {
+          console.log(
+            `[${this.clientId}] Aggregated ASYNC batch of ${result.aggregatedCount} update(s) into version ${result.version}`
+          );
+        }
+        return;
+      } catch (err) {
+        const msg = this.getErrMessage(err);
+        if (
+          msg.includes('already consumed') ||
+          msg.includes('not enough async updates to aggregate')
+        ) {
+          await this.sleep(150);
+          continue;
+        }
+        if (this.isConnectionError(msg)) {
+          await this.reconnectFabricClient();
+          await this.sleep(200);
+          continue;
+        }
+        if (
+          msg.includes('MVCC_READ_CONFLICT') ||
+          msg.includes('PHANTOM_READ_CONFLICT') ||
+          msg.includes('Peer endorsements do not match') ||
+          msg.includes('endorsements do not match')
+        ) {
+          await this.sleep(200 + attempt * 100);
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  async waitForAsyncDrain(graceMs = 15000) {
+    if (!this.isAsyncCommitteeMember) {
+      return;
+    }
+
+    const deadline = Date.now() + graceMs;
+    let consecutiveEmptyChecks = 0;
+
+    while (Date.now() < deadline) {
+      await this.processAsyncAggregationTick({ allowPartial: true });
+      const pendingUpdates = await this.fabricClient.getPendingAsyncUpdates(1);
+      if (!Array.isArray(pendingUpdates) || pendingUpdates.length === 0) {
+        consecutiveEmptyChecks += 1;
+        if (consecutiveEmptyChecks >= 3) {
+          return;
+        }
+      } else {
+        consecutiveEmptyChecks = 0;
+      }
+      await this.sleep(1000);
+    }
+  }
+
   getErrMessage(err) {
     return String(err && err.message ? err.message : err || '');
   }
@@ -450,11 +625,13 @@ class FlClient {
   isRetryable(msg) {
     return (
       msg.includes('MVCC_READ_CONFLICT') ||
+      msg.includes('PHANTOM_READ_CONFLICT') ||
       msg.includes('not ready') ||
       msg.includes('Peer endorsements do not match') ||
       msg.includes('endorsements do not match') ||
       msg.includes('org round') && msg.includes('not ready') ||
-      (msg.includes('round') && msg.includes('not initialized'))
+      (msg.includes('round') && msg.includes('not initialized')) ||
+      msg.includes('not enough async updates to aggregate')
     );
   }
 
@@ -716,17 +893,21 @@ class FlClient {
         );
         console.log(`[${this.clientId}] Finalized sync epoch ${epoch}`);
       } else {
-        await this.withRetry(
+        const submitResult = await this.withRetry(
           'SubmitLocalUpdateAsync',
-          () => this.fabricClient.submitLocalUpdateAsync(
-            collection, 
-            value, 
-            this.localData.sampleCount,
-            this.currentBaselineVersion || 0  // Pass current baseline version for staleness tracking
-          ),
+          () =>
+            this.fabricClient.submitLocalUpdateAsync(
+              collection,
+              value,
+              this.localData.sampleCount,
+              this.currentBaselineVersion || 0
+            ),
           { attempts: 8, initialDelayMs: 200, reconnectOnConnectionError: true }
         );
-        console.log(`[${this.clientId}] Submitted ASYNC update (baselineVersion=${this.currentBaselineVersion || 0})`);
+
+        console.log(
+          `[${this.clientId}] Submitted ASYNC update (txId=${submitResult.txId}, baselineVersion=${this.currentBaselineVersion || 0})`
+        );
       }
       return true;
     } catch (err) {
@@ -877,24 +1058,40 @@ class FlClient {
   async loadLatestGlobalModel() {
     try {
       console.log(`[${this.clientId}] Checking for latest global model on chain...`);
+      if (this.mode === 'async') {
+        const latestVersion = await this.fabricClient.getLatestModelVersion();
+        if (latestVersion === 0) {
+          console.log(`[${this.clientId}] No previous async versions found, starting fresh`);
+          return 0;
+        }
+
+        const globalModel = await this.fabricClient.getGlobalModelByVersion(latestVersion);
+        if (globalModel && globalModel.modelData) {
+          this.updateModelFromGlobal(globalModel);
+          this.currentBaselineVersion = latestVersion;
+          this.latestAvailableVersion = latestVersion;
+          console.log(`[${this.clientId}] Successfully initialized from async version ${latestVersion}`);
+          return latestVersion;
+        }
+        console.log(`[${this.clientId}] Async global model v${latestVersion} missing, using random initialization`);
+        return 0;
+      }
+
       const currentRound = await this.fabricClient.getCurrentRound();
-      
       if (currentRound === 0) {
         console.log(`[${this.clientId}] No previous training rounds found, starting fresh`);
-        return 0; // Return 0 to indicate starting from round 1
+        return 0;
       }
-      
+
       console.log(`[${this.clientId}] Found completed round ${currentRound}, loading global model...`);
       const globalModel = await this.fabricClient.getGlobalModel(currentRound);
-      
       if (globalModel && globalModel.modelData) {
         this.updateModelFromGlobal(globalModel);
         console.log(`[${this.clientId}] Successfully initialized from round ${currentRound} model`);
-        return currentRound; // Return current round number
-      } else {
-        console.log(`[${this.clientId}] Global model not found for round ${currentRound}, using random initialization`);
-        return 0;
+        return currentRound;
       }
+      console.log(`[${this.clientId}] Global model not found for round ${currentRound}, using random initialization`);
+      return 0;
     } catch (err) {
       console.warn(`[${this.clientId}] Failed to load latest model: ${err.message}, continuing with random initialization`);
       return 0;
@@ -950,6 +1147,9 @@ class FlClient {
   }
 
   async cleanup() {
+    if (this.isAsyncCommitteeMember) {
+      await this.stopAsyncCommitteeFlow();
+    }
     if (this.model) {
       this.model.dispose();
     }
@@ -1021,6 +1221,16 @@ class FlClient {
           break;
         }
         lastSubmitStep = completedStep;
+
+        if (this.isAsyncCommitteeMember) {
+          phaseStart = Date.now();
+          try {
+            await this.processAsyncAggregationTick();
+            stepTiming.asyncAggregateTickMs = Date.now() - phaseStart;
+          } catch (err) {
+            console.warn(`[${this.clientId}] Async aggregate tick skipped: ${this.getErrMessage(err)}`);
+          }
+        }
       }
 
       // >>> PERIODIC FETCH LATEST MODEL (non-blocking, every 2s of wall clock)
@@ -1069,6 +1279,14 @@ class FlClient {
 
       // Small delay to prevent busy spinning
       await this.sleep(100);
+    }
+
+    if (this.isAsyncCommitteeMember) {
+      try {
+        await this.waitForAsyncDrain();
+      } catch (err) {
+        console.warn(`[${this.clientId}] Async drain skipped: ${this.getErrMessage(err)}`);
+      }
     }
 
     console.log(`[${this.clientId}] ASYNC training completed: ${completedStep} steps`);

@@ -121,6 +121,7 @@ function buildConnectionProfile() {
 class FabricClient {
   constructor() {
     this.gateway = new Gateway();
+    this.network = null;
     this.contract = null;
   }
 
@@ -133,8 +134,8 @@ class FabricClient {
       discovery: { enabled: true, asLocalhost: true },
     });
 
-    const network = await this.gateway.getNetwork(config.channelName);
-    this.contract = network.getContract(config.chaincodeName);
+    this.network = await this.gateway.getNetwork(config.channelName);
+    this.contract = this.network.getContract(config.chaincodeName);
   }
 
   async set(key, value) {
@@ -178,13 +179,28 @@ class FabricClient {
   }
 
   async submitLocalUpdateAsync(collection, updateData, sampleCount, baselineVersion = 0) {
-    return this.submit(
+    const result = await this.submit(
       'AggregationContract:SubmitLocalUpdateAsync',
       collection,
       updateData,
       sampleCount,
       baselineVersion
     );
+    return JSON.parse(result.toString());
+  }
+
+  async aggregateAsyncBatch(txIds, minUpdates = 5) {
+    const result = await this.submit(
+      'AggregationContract:AggregateAsyncBatch',
+      JSON.stringify(txIds),
+      minUpdates
+    );
+    return JSON.parse(result.toString());
+  }
+
+  async getPendingAsyncUpdates(limit = 0) {
+    const result = await this.evaluate('AggregationContract:GetPendingAsyncUpdates', limit);
+    return JSON.parse(result.toString());
   }
 
   async getGlobalModel(round) {

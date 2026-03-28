@@ -9,6 +9,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const util = require('util');
 const {
   createRunId,
   ensureDirectory,
@@ -16,6 +17,24 @@ const {
   readJsonIfExists,
   summarizeDurations,
 } = require('./utils/timing');
+
+function pipeChildOutput(child, logStream) {
+  if (child.stdout) {
+    child.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      process.stdout.write(text);
+      logStream.write(text);
+    });
+  }
+
+  if (child.stderr) {
+    child.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      process.stderr.write(text);
+      logStream.write(text);
+    });
+  }
+}
 
 // Configuration for each client: org, node, port, organization parameters
 const CLIENTS = [
@@ -68,7 +87,7 @@ const CLIENTS = [
   },
 ];
 
-function launchClient(config, epochs, mode, dataset = 'linear', mnistSamples = 20000) {
+function launchClient(config, epochs, mode, dataset = 'linear', mnistSamples = 20000, logStream) {
   const org1NodeCount = CLIENTS.filter((c) => c.orgMspId === 'Org1MSP').length;
   const org2NodeCount = CLIENTS.filter((c) => c.orgMspId === 'Org2MSP').length;
 
@@ -93,13 +112,16 @@ function launchClient(config, epochs, mode, dataset = 'linear', mnistSamples = 2
   console.log(`[LAUNCHER] Spawning ${clientId} on port ${config.port} (${config.peerName})...`);
 
   const child = spawn('node', args, {
-    stdio: 'inherit',
+    stdio: ['ignore', 'pipe', 'pipe'],
     cwd: path.join(__dirname, '..'),
     env: {
       ...process.env,
       TF_CPP_MIN_LOG_LEVEL: process.env.TF_CPP_MIN_LOG_LEVEL || '2',
+      ASYNC_COMMITTEE_LEADER: process.env.ASYNC_COMMITTEE_LEADER || 'A-N1',
     },
   });
+
+  pipeChildOutput(child, logStream);
 
   child.on('error', (err) => {
     console.error(`[LAUNCHER] Error spawning ${clientId}:`, err);
@@ -123,11 +145,40 @@ async function main() {
   const mnistSamples = process.argv[5] ? Number(process.argv[5]) : 20000;
   const runId = createRunId({ dataset, mode, epochs });
   const timingRoot = path.join(__dirname, '..', 'reports', 'timing', runId);
+  const logsRoot = path.join(__dirname, '..', 'log');
+  const runLogPath = path.join(logsRoot, `${runId}.txt`);
   const runStartedAtMs = Date.now();
 
   ensureDirectory(path.join(timingRoot, 'clients'));
+  ensureDirectory(logsRoot);
+  const logStream = fs.createWriteStream(runLogPath, { flags: 'a' });
+
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+
+  const writeRunLog = (level, args) => {
+    const rendered = util.format(...args);
+    const line = `[${new Date().toISOString()}] [${level}] ${rendered}`;
+    logStream.write(line.endsWith('\n') ? line : `${line}\n`);
+  };
+
+  console.log = (...args) => {
+    originalLog(...args);
+    writeRunLog('INFO', args);
+  };
+  console.warn = (...args) => {
+    originalWarn(...args);
+    writeRunLog('WARN', args);
+  };
+  console.error = (...args) => {
+    originalError(...args);
+    writeRunLog('ERROR', args);
+  };
+
   process.env.FL_TIMING_RUN_ID = runId;
   process.env.FL_TIMING_ROOT = timingRoot;
+  console.log(`[LAUNCHER] Run log file: log/${runId}.txt`);
 
   console.log(`[LAUNCHER] Starting ${CLIENTS.length} FL clients`);
   console.log(`[LAUNCHER] Topology: Bank A (Org1) - 2 nodes, Bank B (Org2) - 3 nodes`);
@@ -189,7 +240,7 @@ async function main() {
 
   const childExitCodes = {};
   const processes = CLIENTS.map((config) => {
-    const child = launchClient(config, epochs, mode, dataset, mnistSamples);
+    const child = launchClient(config, epochs, mode, dataset, mnistSamples, logStream);
     const clientId = `${config.org}-N${config.node}`;
     childExitCodes[clientId] = null;
     child.on('exit', (code) => {
@@ -219,9 +270,10 @@ async function main() {
     evaluateArgs.push(String(mnistSamples));
   }
   const evaluateProc = spawn('node', evaluateArgs, {
-    stdio: 'inherit',
+    stdio: ['ignore', 'pipe', 'pipe'],
     cwd: path.join(__dirname, '..'),
   });
+  pipeChildOutput(evaluateProc, logStream);
   const evaluateExitCode = await new Promise((resolve) => {
     evaluateProc.on('exit', (code) => resolve(code ?? 1));
   });
@@ -236,9 +288,10 @@ async function main() {
   const reportStartedAtMs = Date.now();
   const reportScript = path.join(__dirname, 'utils', 'generateReport.js');
   const reportProc = spawn('node', [reportScript, dataset], {
-    stdio: 'inherit',
+    stdio: ['ignore', 'pipe', 'pipe'],
     cwd: path.join(__dirname, '..'),
   });
+  pipeChildOutput(reportProc, logStream);
 
   const reportExitCode = await new Promise((resolve) => {
     reportProc.on('exit', (code) => resolve(code ?? 1));
@@ -290,6 +343,13 @@ async function main() {
   });
 
   console.log(`[LAUNCHER] Timing summary written to reports/timing/${runId}/run-summary.json`);
+
+  console.log = originalLog;
+  console.warn = originalWarn;
+  console.error = originalError;
+  await new Promise((resolve) => logStream.end(resolve));
 }
 
-main().catch(console.error);
+main().catch(async (err) => {
+  console.error(err);
+});

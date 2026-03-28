@@ -1,0 +1,618 @@
+[2026-03-28T01:52:25.670Z] [INFO] [LAUNCHER] Run log file: log/2026-03-28T01-52-25-659Z-mnist-async-10r.txt
+[2026-03-28T01:52:25.672Z] [INFO] [LAUNCHER] Starting 5 FL clients
+[2026-03-28T01:52:25.672Z] [INFO] [LAUNCHER] Topology: Bank A (Org1) - 2 nodes, Bank B (Org2) - 3 nodes
+[2026-03-28T01:52:25.673Z] [INFO] [LAUNCHER] Configuration: epochs=10, mode=async, dataset=mnist
+[2026-03-28T01:52:25.673Z] [INFO] [LAUNCHER] Timing run ID: 2026-03-28T01-52-25-659Z-mnist-async-10r
+[2026-03-28T01:52:25.673Z] [INFO] [LAUNCHER] MNIST samples: 20000
+[2026-03-28T01:52:25.673Z] [INFO] [LAUNCHER] Usage: node launchClients.js [epochs] [mode] [dataset] [mnistSamples]
+[2026-03-28T01:52:25.673Z] [INFO] [LAUNCHER] Example: node launchClients.js 10 sync linear
+[2026-03-28T01:52:26.413Z] [INFO] [LAUNCHER] Available datasets: linear, mnist
+[2026-03-28T01:52:26.415Z] [INFO] [LAUNCHER] Spawning A-N1 on port 3001 (peer0.org1.example.com)...
+[2026-03-28T01:52:26.430Z] [INFO] [LAUNCHER] Spawning A-N2 on port 3002 (peer0.org1.example.com)...
+[2026-03-28T01:52:26.436Z] [INFO] [LAUNCHER] Spawning B-N1 on port 3003 (peer0.org2.example.com)...
+[2026-03-28T01:52:26.448Z] [INFO] [LAUNCHER] Spawning B-N2 on port 3004 (peer0.org2.example.com)...
+[2026-03-28T01:52:26.458Z] [INFO] [LAUNCHER] Spawning B-N3 on port 3005 (peer0.org2.example.com)...
+[A-N2] Initializing... (org1.example.com/peer0.org1.example.com)
+[A-N2] Using dataset: mnist
+[B-N2] Initializing... (org2.example.com/peer0.org2.example.com)
+[A-N1] Initializing... (org1.example.com/peer0.org1.example.com)
+[B-N2] Using dataset: mnist
+[A-N1] Using dataset: mnist
+[B-N3] Initializing... (org2.example.com/peer0.org2.example.com)
+[B-N3] Using dataset: mnist
+[B-N1] Initializing... (org2.example.com/peer0.org2.example.com)
+[B-N1] Using dataset: mnist
+[B-N3] Connected to Fabric (peer0.org2.example.com)
+[B-N2] Connected to Fabric (peer0.org2.example.com)
+[A-N2] Connected to Fabric (peer0.org1.example.com)
+[B-N1] Connected to Fabric (peer0.org2.example.com)
+[B-N3] Acting as async committee backup #4
+[B-N2] Acting as async committee backup #3
+[B-N1] Acting as async committee backup #2
+[A-N1] Connected to Fabric (peer0.org1.example.com)
+[B-N1] Loading MNIST dataset...
+[B-N3] Loading MNIST dataset...
+Loading training data (max 20000 samples)...
+Loading training data (max 20000 samples)...
+[B-N2] Loading MNIST dataset...
+Loading training data (max 20000 samples)...
+[A-N2] Acting as async committee backup #1
+[A-N2] Loading MNIST dataset...
+Loading training data (max 20000 samples)...
+[A-N1] Acting as async committee leader
+[A-N1] Loading MNIST dataset...
+Loading training data (max 20000 samples)...
+[A-N2] Loaded MNIST dataset: 4000 samples
+[A-N1] Loaded MNIST dataset: 4000 samples
+[B-N2] Loaded MNIST dataset: 4000 samples
+[B-N3] Loaded MNIST dataset: 4000 samples
+[B-N1] Loaded MNIST dataset: 4000 samples
+[B-N2] Model initialized (mnist)
+[B-N2] Checking for latest global model on chain...
+[B-N3] Model initialized (mnist)
+[B-N3] Checking for latest global model on chain...
+[A-N1] Model initialized (mnist)
+[A-N2] Model initialized (mnist)
+[A-N1] Checking for latest global model on chain...
+[A-N2] Checking for latest global model on chain...
+[B-N1] Model initialized (mnist)
+[B-N1] Checking for latest global model on chain...
+[B-N2] No previous async versions found, starting fresh
+[B-N3] No previous async versions found, starting fresh
+
+[B-N2] Starting ASYNC training with 10 rounds
+[B-N2] Using asynchronous training loop (no round barrier)
+[B-N2] Starting ASYNC training: 10 total steps, model-update every 1 steps
+[B-N2] Training for 1 epoch...
+
+[B-N3] Starting ASYNC training with 10 rounds
+[B-N3] Using asynchronous training loop (no round barrier)
+[B-N3] Starting ASYNC training: 10 total steps, model-update every 1 steps
+[B-N3] Training for 1 epoch...
+[A-N1] No previous async versions found, starting fresh
+
+[A-N1] Starting ASYNC training with 10 rounds
+[A-N1] Using asynchronous training loop (no round barrier)
+[A-N1] Starting ASYNC training: 10 total steps, model-update every 1 steps
+[A-N1] Training for 1 epoch...
+[A-N2] No previous async versions found, starting fresh
+
+[A-N2] Starting ASYNC training with 10 rounds
+[A-N2] Using asynchronous training loop (no round barrier)
+[A-N2] Starting ASYNC training: 10 total steps, model-update every 1 steps
+[A-N2] Training for 1 epoch...
+[B-N1] No previous async versions found, starting fresh
+
+[B-N1] Starting ASYNC training with 10 rounds
+[B-N1] Using asynchronous training loop (no round barrier)
+[B-N1] Starting ASYNC training: 10 total steps, model-update every 1 steps
+[B-N1] Training for 1 epoch...
+[B-N1] Epoch training complete
+[B-N2] Epoch training complete
+[A-N1] Epoch training complete
+[A-N2] Epoch training complete
+[B-N3] Epoch training complete
+[B-N1] Submitted ASYNC update (txId=1cb93a44400f06d076531b644e1b23543d0e1b6b88b3b9124b644acdf6fa3f2b, baselineVersion=0)
+[B-N1] Training for 1 epoch...
+[A-N2] Submitted ASYNC update (txId=c452b2000a50b28058e05d6088541f33e3543850c512a4a74f8b25bb348fe9ec, baselineVersion=0)
+[A-N2] Training for 1 epoch...
+[B-N3] Submitted ASYNC update (txId=0fe6ca27eaf7e83f013e39bd1e2ccb8408214b342ab9483a7edd132fff84f6fd, baselineVersion=0)
+[A-N1] Submitted ASYNC update (txId=e8d033ccc2c158eb47b52ae699eedcf78eeaefa29dcf6bfef1f1c6a4237a1292, baselineVersion=0)
+[B-N3] Training for 1 epoch...
+[B-N2] Submitted ASYNC update (txId=0f05ab6c0289ba11b82315cf213a255ec7609beaac920f8e2caa8173941f231a, baselineVersion=0)
+[A-N1] Aggregated ASYNC batch of 5 update(s) into version 1
+2026-03-28T01:52:37.402Z - [33mwarn[39m: [TransactionEventHandler]: strategyFail: commit failure for transaction "e1b227e72816cb8d022684e8f5318faab1d317002d7b942afa8d56cdf7713d0c": TransactionError: Commit of transaction e1b227e72816cb8d022684e8f5318faab1d317002d7b942afa8d56cdf7713d0c failed on peer peer1.org1.example.com:7151 with status MVCC_READ_CONFLICT
+    at TransactionEventHandler.eventCallback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/transactioneventhandler.js:111:31)
+    at CommitListenerSession.notifyListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:101:18)
+    at EventListener.callback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:92:18)
+    at EventListener.onEvent (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventListener.js:124:10)
+    at EventService._callTransactionListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1051:16)
+    at EventService._processTxEvents (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1006:12)
+    at ClientDuplexStreamImpl.<anonymous> (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:481:12)
+    at ClientDuplexStreamImpl.emit (node:events:517:28)
+    at addChunk (node:internal/streams/readable:368:12)
+    at readableAddChunk (node:internal/streams/readable:341:9) {
+  transactionId: 'e1b227e72816cb8d022684e8f5318faab1d317002d7b942afa8d56cdf7713d0c',
+  transactionCode: 'MVCC_READ_CONFLICT'
+}
+[A-N1] Updated CNN model from global (184586 params)
+[A-N1] Global model saved to models/mnist/async/global-model-version-1.json
+[A-N1] Applied global model v1 at step 1
+[A-N1] Training for 1 epoch...
+[B-N1] Epoch training complete
+[A-N2] Epoch training complete
+[B-N3] Epoch training complete
+[B-N1] Submitted ASYNC update (txId=29023bd0df80946a95333055309fee1732cf82935d8f036e0d80b3d515730c44, baselineVersion=0)
+[A-N2] Submitted ASYNC update (txId=d2b957ea92ed9a66d36b9295462e7ac0f075a26f02c3215c66c0d7defffba780, baselineVersion=0)
+[B-N1] Updated CNN model from global (184586 params)
+[B-N1] Global model saved to models/mnist/async/global-model-version-1.json
+[B-N1] Applied global model v1 at step 2
+[B-N1] Training for 1 epoch...
+[A-N2] Updated CNN model from global (184586 params)
+[A-N2] Global model saved to models/mnist/async/global-model-version-1.json
+[B-N3] Submitted ASYNC update (txId=4e0aac60ec16740353e1393d003e782b006e7e9958bf1205502ed6d8c5e20095, baselineVersion=0)
+[A-N2] Applied global model v1 at step 2
+[A-N2] Training for 1 epoch...
+[A-N1] Epoch training complete
+[B-N3] Updated CNN model from global (184586 params)
+[B-N3] Global model saved to models/mnist/async/global-model-version-1.json
+[B-N3] Applied global model v1 at step 2
+[B-N3] Training for 1 epoch...
+[A-N1] Submitted ASYNC update (txId=c0b4932bdfcdb37149082ca5a33f0abf0a9e3cfb0731099e3c53b5b11b9aedab, baselineVersion=1)
+[A-N1] Training for 1 epoch...
+[B-N2] Updated CNN model from global (184586 params)
+[B-N2] Global model saved to models/mnist/async/global-model-version-1.json
+[B-N2] Applied global model v1 at step 1
+[B-N2] Training for 1 epoch...
+[B-N1] Epoch training complete
+[A-N2] Epoch training complete
+[B-N3] Epoch training complete
+[B-N1] Submitted ASYNC update (txId=d7f1a40768fb21a3e61d25f16ef94617c55188cd44ef3a85d28b65de8feac9f1, baselineVersion=1)
+[A-N2] Submitted ASYNC update (txId=56f0f66b0c783f6c11254f41494b2b560ab579ccace5e9606fbc95a0216c2c67, baselineVersion=1)
+[A-N1] Epoch training complete
+[B-N3] Submitted ASYNC update (txId=3d25fe63f508037f7742211de976b2c915311e9564ff83666099563378de40c2, baselineVersion=1)
+[B-N3] Aggregated ASYNC batch of 5 update(s) into version 2
+[A-N1] Submitted ASYNC update (txId=326f30f56a4e97f9695b37cf3f324aac257ebd6ac80cfbd776a0867bb8600eee, baselineVersion=1)
+2026-03-28T01:52:48.975Z - [33mwarn[39m: [TransactionEventHandler]: strategyFail: commit failure for transaction "ad34d1ecf4afc764cf9fd77777571abf1e673dc2a2b52434917f4d4659ee4517": TransactionError: Commit of transaction ad34d1ecf4afc764cf9fd77777571abf1e673dc2a2b52434917f4d4659ee4517 failed on peer peer0.org1.example.com with status MVCC_READ_CONFLICT
+    at TransactionEventHandler.eventCallback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/transactioneventhandler.js:111:31)
+    at CommitListenerSession.notifyListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:101:18)
+    at EventListener.callback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:92:18)
+    at EventListener.onEvent (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventListener.js:124:10)
+    at EventService._callTransactionListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1051:16)
+    at EventService._processTxEvents (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1006:12)
+    at ClientDuplexStreamImpl.<anonymous> (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:481:12)
+    at ClientDuplexStreamImpl.emit (node:events:517:28)
+    at addChunk (node:internal/streams/readable:368:12)
+    at readableAddChunk (node:internal/streams/readable:341:9) {
+  transactionId: 'ad34d1ecf4afc764cf9fd77777571abf1e673dc2a2b52434917f4d4659ee4517',
+  transactionCode: 'MVCC_READ_CONFLICT'
+}
+[B-N2] Epoch training complete
+[A-N1] Updated CNN model from global (184586 params)
+[A-N1] Global model saved to models/mnist/async/global-model-version-2.json
+[A-N1] Applied global model v2 at step 3
+[A-N1] Training for 1 epoch...
+[A-N2] Updated CNN model from global (184586 params)
+[A-N2] Global model saved to models/mnist/async/global-model-version-2.json
+[A-N2] Applied global model v2 at step 3
+[A-N2] Training for 1 epoch...
+[B-N2] Submitted ASYNC update (txId=ba14dc8c4b209f661b14a90d915a27467a35644bcdf84c119317ae643d2d9615, baselineVersion=1)
+[B-N2] Updated CNN model from global (184586 params)
+[B-N2] Global model saved to models/mnist/async/global-model-version-2.json
+[B-N2] Applied global model v2 at step 2
+[B-N2] Training for 1 epoch...
+[B-N1] Updated CNN model from global (184586 params)
+[B-N1] Global model saved to models/mnist/async/global-model-version-2.json
+[B-N1] Applied global model v2 at step 3
+[B-N1] Training for 1 epoch...
+[A-N1] Epoch training complete
+[A-N2] Epoch training complete
+[A-N1] Submitted ASYNC update (txId=03e86d5cef0e48a44db22f0deec538dca1f1c2b5f19c402708465bb63ebc5fbf, baselineVersion=2)
+[B-N2] Epoch training complete
+[A-N2] Submitted ASYNC update (txId=e434530ba5d00a1a6b295f630b9f4567de5c1ca25297caf95131c4d596b79635, baselineVersion=2)
+[A-N1] Aggregated ASYNC batch of 5 update(s) into version 3
+[B-N1] Epoch training complete
+[A-N1] Updated CNN model from global (184586 params)
+2026-03-28T01:52:56.177Z - [33mwarn[39m: [TransactionEventHandler]: strategyFail: commit failure for transaction "8f72275bd2b00d5483cb6086f22011bd2c99d78c8ea332eff659807fb7fceaf5": TransactionError: Commit of transaction 8f72275bd2b00d5483cb6086f22011bd2c99d78c8ea332eff659807fb7fceaf5 failed on peer peer1.org2.example.com:9151 with status MVCC_READ_CONFLICT
+    at TransactionEventHandler.eventCallback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/transactioneventhandler.js:111:31)
+    at CommitListenerSession.notifyListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:101:18)
+    at EventListener.callback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:92:18)
+    at EventListener.onEvent (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventListener.js:124:10)
+    at EventService._callTransactionListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1051:16)
+    at EventService._processTxEvents (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1006:12)
+    at ClientDuplexStreamImpl.<anonymous> (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:481:12)
+    at ClientDuplexStreamImpl.emit (node:events:517:28)
+    at addChunk (node:internal/streams/readable:368:12)
+    at readableAddChunk (node:internal/streams/readable:341:9) {
+  transactionId: '8f72275bd2b00d5483cb6086f22011bd2c99d78c8ea332eff659807fb7fceaf5',
+  transactionCode: 'MVCC_READ_CONFLICT'
+}
+[A-N1] Global model saved to models/mnist/async/global-model-version-3.json
+[B-N2] Submitted ASYNC update (txId=482c2ce8fd641f883a85cb54b041e4a75a2d607b598d2710a0e18094a9d3d935, baselineVersion=2)
+[A-N1] Applied global model v3 at step 4
+[A-N1] Training for 1 epoch...
+2026-03-28T01:52:56.733Z - [33mwarn[39m: [TransactionEventHandler]: strategyFail: commit failure for transaction "a7e5f6b9bd4c11420f048368fd6687a61115b11c2004dfd0125c87c42f060fad": TransactionError: Commit of transaction a7e5f6b9bd4c11420f048368fd6687a61115b11c2004dfd0125c87c42f060fad failed on peer peer0.org1.example.com with status MVCC_READ_CONFLICT
+    at TransactionEventHandler.eventCallback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/transactioneventhandler.js:111:31)
+    at CommitListenerSession.notifyListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:101:18)
+    at EventListener.callback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:92:18)
+    at EventListener.onEvent (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventListener.js:124:10)
+    at EventService._callTransactionListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1051:16)
+    at EventService._processTxEvents (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1006:12)
+    at ClientDuplexStreamImpl.<anonymous> (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:481:12)
+    at ClientDuplexStreamImpl.emit (node:events:517:28)
+    at addChunk (node:internal/streams/readable:368:12)
+    at readableAddChunk (node:internal/streams/readable:341:9) {
+  transactionId: 'a7e5f6b9bd4c11420f048368fd6687a61115b11c2004dfd0125c87c42f060fad',
+  transactionCode: 'MVCC_READ_CONFLICT'
+}
+[B-N2] Updated CNN model from global (184586 params)
+[B-N2] Global model saved to models/mnist/async/global-model-version-3.json
+[B-N2] Applied global model v3 at step 3
+[B-N2] Training for 1 epoch...
+[A-N2] Updated CNN model from global (184586 params)
+[A-N2] Global model saved to models/mnist/async/global-model-version-3.json
+[A-N2] Applied global model v3 at step 4
+[B-N1] Submitted ASYNC update (txId=c3abfa603719fe4d763bb57e30edb5362e59b3bf68e71a4456d8f4d2beac06d8, baselineVersion=2)
+[A-N2] Training for 1 epoch...
+[B-N1] Updated CNN model from global (184586 params)
+[B-N1] Global model saved to models/mnist/async/global-model-version-3.json
+[B-N1] Applied global model v3 at step 4
+[B-N1] Training for 1 epoch...
+[B-N3] Updated CNN model from global (184586 params)
+[B-N3] Global model saved to models/mnist/async/global-model-version-3.json
+[B-N3] Applied global model v3 at step 3
+[B-N3] Training for 1 epoch...
+[A-N1] Epoch training complete
+[B-N2] Epoch training complete
+[A-N1] Submitted ASYNC update (txId=57e326410eb76b30e31abcf474fbc9c0305293d793e86693d2d21410dafdf9b0, baselineVersion=3)
+[A-N2] Epoch training complete
+[B-N1] Epoch training complete
+[A-N1] Training for 1 epoch...
+[B-N2] Submitted ASYNC update (txId=26a9fb1d09732724474774992036ba7c5d9a2bc69093ed466ebb63324f1e084a, baselineVersion=3)
+[B-N3] Epoch training complete
+[A-N2] Submitted ASYNC update (txId=442c5c8fd087fa6e3bb7e8b8328fd8e458e3b96b7fb807ae1249d3ba74f7488d, baselineVersion=3)
+[B-N1] Submitted ASYNC update (txId=978f0effad4bf1064c8faedf67bfdf523784861f5edd0206a715dbf8e06fa5b8, baselineVersion=3)
+[B-N3] Submitted ASYNC update (txId=e9ebad26f26e89e28945819c5b97f4998ab335f4f39ea70f22607deeda244c37, baselineVersion=3)
+[B-N3] Aggregated ASYNC batch of 5 update(s) into version 4
+[A-N1] Epoch training complete
+2026-03-28T01:53:07.773Z - [33mwarn[39m: [TransactionEventHandler]: strategyFail: commit failure for transaction "3621c1c1687d86ed2f4433a083519ccd9e5a030876cf7dfa705ff3f571fe1d88": TransactionError: Commit of transaction 3621c1c1687d86ed2f4433a083519ccd9e5a030876cf7dfa705ff3f571fe1d88 failed on peer peer0.org1.example.com with status MVCC_READ_CONFLICT
+    at TransactionEventHandler.eventCallback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/transactioneventhandler.js:111:31)
+    at CommitListenerSession.notifyListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:101:18)
+    at EventListener.callback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:92:18)
+    at EventListener.onEvent (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventListener.js:124:10)
+    at EventService._callTransactionListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1051:16)
+    at EventService._processTxEvents (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1006:12)
+    at ClientDuplexStreamImpl.<anonymous> (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:481:12)
+    at ClientDuplexStreamImpl.emit (node:events:517:28)
+    at addChunk (node:internal/streams/readable:368:12)
+    at readableAddChunk (node:internal/streams/readable:341:9) {
+  transactionId: '3621c1c1687d86ed2f4433a083519ccd9e5a030876cf7dfa705ff3f571fe1d88',
+  transactionCode: 'MVCC_READ_CONFLICT'
+}
+[A-N2] Updated CNN model from global (184586 params)
+[A-N2] Global model saved to models/mnist/async/global-model-version-4.json
+[A-N2] Applied global model v4 at step 5
+[A-N2] Training for 1 epoch...
+[A-N1] Submitted ASYNC update (txId=000ec31cb651b56163d1705ac47f8136c432785a519ee0b3208755993e98fb26, baselineVersion=3)
+[A-N1] Updated CNN model from global (184586 params)
+[A-N1] Global model saved to models/mnist/async/global-model-version-4.json
+[A-N1] Applied global model v4 at step 6
+[A-N1] Training for 1 epoch...
+[B-N2] Updated CNN model from global (184586 params)
+[B-N2] Global model saved to models/mnist/async/global-model-version-4.json
+[B-N1] Updated CNN model from global (184586 params)
+[B-N2] Applied global model v4 at step 4
+[B-N1] Global model saved to models/mnist/async/global-model-version-4.json
+[B-N1] Applied global model v4 at step 5
+[B-N2] Training for 1 epoch...
+[B-N1] Training for 1 epoch...
+[A-N2] Epoch training complete
+[A-N1] Epoch training complete
+[A-N2] Submitted ASYNC update (txId=8a884ccef03b71746649700701bab87038761ab4c1ffa1fb0966c76e995eb15f, baselineVersion=4)
+[A-N1] Submitted ASYNC update (txId=c964157727e75e58759a6df47c1ffb57a653f1beac1fd59309346f3a462031cd, baselineVersion=4)
+[A-N1] Aggregated ASYNC batch of 5 update(s) into version 5
+2026-03-28T01:53:14.806Z - [33mwarn[39m: [TransactionEventHandler]: strategyFail: commit failure for transaction "b3648741e04e34f636d4893c6af720afe12bea45ae0bd02d8467e5db455838ea": TransactionError: Commit of transaction b3648741e04e34f636d4893c6af720afe12bea45ae0bd02d8467e5db455838ea failed on peer peer0.org1.example.com with status MVCC_READ_CONFLICT
+    at TransactionEventHandler.eventCallback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/transactioneventhandler.js:111:31)
+    at CommitListenerSession.notifyListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:101:18)
+    at EventListener.callback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:92:18)
+    at EventListener.onEvent (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventListener.js:124:10)
+    at EventService._callTransactionListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1051:16)
+    at EventService._processTxEvents (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1006:12)
+    at ClientDuplexStreamImpl.<anonymous> (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:481:12)
+    at ClientDuplexStreamImpl.emit (node:events:517:28)
+    at addChunk (node:internal/streams/readable:368:12)
+    at readableAddChunk (node:internal/streams/readable:341:9) {
+  transactionId: 'b3648741e04e34f636d4893c6af720afe12bea45ae0bd02d8467e5db455838ea',
+  transactionCode: 'MVCC_READ_CONFLICT'
+}
+[B-N1] Epoch training complete
+[B-N2] Epoch training complete
+[A-N2] Updated CNN model from global (184586 params)
+[A-N2] Global model saved to models/mnist/async/global-model-version-5.json
+[A-N2] Applied global model v5 at step 6
+[A-N2] Training for 1 epoch...
+[A-N1] Updated CNN model from global (184586 params)
+[A-N1] Global model saved to models/mnist/async/global-model-version-5.json
+[A-N1] Applied global model v5 at step 7
+[A-N1] Training for 1 epoch...
+[B-N1] Submitted ASYNC update (txId=5a6932fb1c5325630bd1c2a3ed1ff3e2aa4bfc3b2d5d79c47b43c46025cc7fa7, baselineVersion=4)
+[B-N2] Submitted ASYNC update (txId=d2feb421698c475c7b66cec2a1e546fc637ff40c4c801f442ede6c0099edf9cb, baselineVersion=4)
+[B-N3] Updated CNN model from global (184586 params)
+[B-N3] Global model saved to models/mnist/async/global-model-version-5.json
+[B-N1] Updated CNN model from global (184586 params)
+[B-N3] Applied global model v5 at step 4
+[B-N1] Global model saved to models/mnist/async/global-model-version-5.json
+[B-N1] Applied global model v5 at step 6
+[B-N3] Training for 1 epoch...
+[B-N1] Training for 1 epoch...
+[B-N2] Updated CNN model from global (184586 params)
+[B-N2] Global model saved to models/mnist/async/global-model-version-5.json
+[B-N2] Applied global model v5 at step 5
+[B-N2] Training for 1 epoch...
+[A-N2] Epoch training complete
+[A-N1] Epoch training complete
+[A-N2] Submitted ASYNC update (txId=b132a182c459a5bb7852244ff2400ad7ee6aa77527418ec01ea25ee2e93b42db, baselineVersion=5)
+[B-N1] Epoch training complete
+[A-N2] Training for 1 epoch...
+[A-N1] Submitted ASYNC update (txId=0d53ecdf42e011c2b9725ca294925091466f83559d49da56bebc61c08ddaf829, baselineVersion=5)
+[B-N2] Epoch training complete
+[B-N3] Epoch training complete
+[B-N1] Submitted ASYNC update (txId=6d3c3ff5e520c4f2d13bc2a511b22fce7a8d8861d1f2dd141040682b23cd1834, baselineVersion=5)
+2026-03-28T01:53:24.402Z - [33mwarn[39m: [TransactionEventHandler]: strategyFail: commit failure for transaction "bffaa196524c828b88f77e7c420eb306b7d9743ace285fb3ed9d37529e4683b9": TransactionError: Commit of transaction bffaa196524c828b88f77e7c420eb306b7d9743ace285fb3ed9d37529e4683b9 failed on peer peer1.org1.example.com:7151 with status MVCC_READ_CONFLICT
+    at TransactionEventHandler.eventCallback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/transactioneventhandler.js:111:31)
+    at CommitListenerSession.notifyListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:101:18)
+    at EventListener.callback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:92:18)
+    at EventListener.onEvent (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventListener.js:124:10)
+    at EventService._callTransactionListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1051:16)
+    at EventService._processTxEvents (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1006:12)
+    at ClientDuplexStreamImpl.<anonymous> (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:481:12)
+    at ClientDuplexStreamImpl.emit (node:events:517:28)
+    at addChunk (node:internal/streams/readable:368:12)
+    at readableAddChunk (node:internal/streams/readable:341:9) {
+  transactionId: 'bffaa196524c828b88f77e7c420eb306b7d9743ace285fb3ed9d37529e4683b9',
+  transactionCode: 'MVCC_READ_CONFLICT'
+}
+[A-N1] Aggregated ASYNC batch of 5 update(s) into version 6
+[B-N2] Submitted ASYNC update (txId=c29c68df657962fafe0944e6bfbe73bcec5e21478a92eda42202f417f2250de1, baselineVersion=5)
+[B-N3] Submitted ASYNC update (txId=0c01b4d19ddebbaa8905cf32784995817c56296684b794e5be90ba8a9fb283e7, baselineVersion=5)
+[A-N1] Updated CNN model from global (184586 params)
+[A-N1] Global model saved to models/mnist/async/global-model-version-6.json
+[A-N1] Applied global model v6 at step 8
+2026-03-28T01:53:25.468Z - [33mwarn[39m: [TransactionEventHandler]: strategyFail: commit failure for transaction "37d084479fba706c034e8faed0501add72f93c156e56795bb03dbe035a03a760": TransactionError: Commit of transaction 37d084479fba706c034e8faed0501add72f93c156e56795bb03dbe035a03a760 failed on peer peer1.org2.example.com:9151 with status MVCC_READ_CONFLICT
+    at TransactionEventHandler.eventCallback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/transactioneventhandler.js:111:31)
+    at CommitListenerSession.notifyListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:101:18)
+    at EventListener.callback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:92:18)
+    at EventListener.onEvent (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventListener.js:124:10)
+    at EventService._callTransactionListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1051:16)
+    at EventService._processTxEvents (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1006:12)
+    at ClientDuplexStreamImpl.<anonymous> (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:481:12)
+    at ClientDuplexStreamImpl.emit (node:events:517:28)
+    at addChunk (node:internal/streams/readable:368:12)
+    at readableAddChunk (node:internal/streams/readable:341:9) {
+  transactionId: '37d084479fba706c034e8faed0501add72f93c156e56795bb03dbe035a03a760',
+  transactionCode: 'MVCC_READ_CONFLICT'
+}
+[A-N1] Training for 1 epoch...
+[A-N2] Epoch training complete
+[A-N2] Submitted ASYNC update (txId=90f633157d2076b87fa7e08935ba1c2037217d0dafd481f1e92cbf5b98661b3f, baselineVersion=5)
+[A-N2] Updated CNN model from global (184586 params)
+[A-N2] Global model saved to models/mnist/async/global-model-version-6.json
+[A-N2] Applied global model v6 at step 8
+[A-N2] Training for 1 epoch...
+[A-N1] Epoch training complete
+[A-N1] Submitted ASYNC update (txId=54c134184ef84d7aec12c713ed02612214db9d6a25779086078c1d42f1117ed5, baselineVersion=6)
+[B-N1] Updated CNN model from global (184586 params)
+[B-N1] Global model saved to models/mnist/async/global-model-version-6.json
+[B-N1] Applied global model v6 at step 7
+[B-N1] Training for 1 epoch...
+[A-N2] Epoch training complete
+[A-N1] Aggregated ASYNC batch of 5 update(s) into version 7
+2026-03-28T01:53:30.833Z - [33mwarn[39m: [TransactionEventHandler]: strategyFail: commit failure for transaction "700cd242a4f29c72df7b215a4b0e2b0618ea8dd05349b2344ee6eb051dade692": TransactionError: Commit of transaction 700cd242a4f29c72df7b215a4b0e2b0618ea8dd05349b2344ee6eb051dade692 failed on peer peer1.org1.example.com:7151 with status MVCC_READ_CONFLICT
+    at TransactionEventHandler.eventCallback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/transactioneventhandler.js:111:31)
+    at CommitListenerSession.notifyListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:101:18)
+    at EventListener.callback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:92:18)
+    at EventListener.onEvent (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventListener.js:124:10)
+    at EventService._callTransactionListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1051:16)
+    at EventService._processTxEvents (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1006:12)
+    at ClientDuplexStreamImpl.<anonymous> (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:481:12)
+    at ClientDuplexStreamImpl.emit (node:events:517:28)
+    at addChunk (node:internal/streams/readable:368:12)
+    at readableAddChunk (node:internal/streams/readable:341:9) {
+  transactionId: '700cd242a4f29c72df7b215a4b0e2b0618ea8dd05349b2344ee6eb051dade692',
+  transactionCode: 'MVCC_READ_CONFLICT'
+}
+[A-N1] Updated CNN model from global (184586 params)
+[A-N1] Global model saved to models/mnist/async/global-model-version-7.json
+[A-N1] Applied global model v7 at step 9
+[A-N1] Training for 1 epoch...
+[A-N2] Submitted ASYNC update (txId=1c22c8dc74fd949e7f5b95a3586799b6510142b9981849c7b9da4c5edc7cc175, baselineVersion=6)
+[A-N2] Updated CNN model from global (184586 params)
+[A-N2] Global model saved to models/mnist/async/global-model-version-7.json
+[A-N2] Applied global model v7 at step 9
+[A-N2] Training for 1 epoch...
+[B-N1] Epoch training complete
+[B-N2] Updated CNN model from global (184586 params)
+[B-N2] Global model saved to models/mnist/async/global-model-version-7.json
+[B-N2] Applied global model v7 at step 6
+[B-N2] Training for 1 epoch...
+[B-N1] Submitted ASYNC update (txId=34e1230d2281a6422a1fc5c737b43623502af27ff9c22590b11054b957f18280, baselineVersion=6)
+[B-N1] Updated CNN model from global (184586 params)
+[B-N1] Global model saved to models/mnist/async/global-model-version-7.json
+[B-N1] Applied global model v7 at step 8
+[B-N1] Training for 1 epoch...
+[A-N1] Epoch training complete
+[A-N2] Epoch training complete
+[B-N3] Updated CNN model from global (184586 params)
+[B-N3] Global model saved to models/mnist/async/global-model-version-7.json
+[B-N3] Applied global model v7 at step 5
+[B-N3] Training for 1 epoch...
+[A-N1] Submitted ASYNC update (txId=71cd68240f2a4cb60119c197e7e0b6bf7d244bd76634bc3674862e66fcd5ee95, baselineVersion=7)
+[B-N2] Epoch training complete
+[B-N1] Epoch training complete
+[A-N2] Submitted ASYNC update (txId=c144d2f5b8e723a5216c239351734a710bbce25dad67c8445dcdcfd9087a2429, baselineVersion=7)
+[B-N2] Submitted ASYNC update (txId=2ad28ec934c37b92be5feb919f4f0652498f45c588349bbc41210ad471051471, baselineVersion=7)
+[B-N3] Epoch training complete
+[B-N1] Submitted ASYNC update (txId=fbc2efc808b94c300a8bd38fd3c068e07e27e098d377d1d736d1d02d64f9f86c, baselineVersion=7)
+2026-03-28T01:53:42.254Z - [33mwarn[39m: [TransactionEventHandler]: strategyFail: commit failure for transaction "71fc5f3c9a56fef38e4502484cd15cb08313a1727cff91a0c86cbfe5132433b3": TransactionError: Commit of transaction 71fc5f3c9a56fef38e4502484cd15cb08313a1727cff91a0c86cbfe5132433b3 failed on peer peer1.org1.example.com:7151 with status MVCC_READ_CONFLICT
+    at TransactionEventHandler.eventCallback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/transactioneventhandler.js:111:31)
+    at CommitListenerSession.notifyListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:101:18)
+    at EventListener.callback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:92:18)
+    at EventListener.onEvent (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventListener.js:124:10)
+    at EventService._callTransactionListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1051:16)
+    at EventService._processTxEvents (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1006:12)
+    at ClientDuplexStreamImpl.<anonymous> (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:481:12)
+    at ClientDuplexStreamImpl.emit (node:events:517:28)
+    at addChunk (node:internal/streams/readable:368:12)
+    at readableAddChunk (node:internal/streams/readable:341:9) {
+  transactionId: '71fc5f3c9a56fef38e4502484cd15cb08313a1727cff91a0c86cbfe5132433b3',
+  transactionCode: 'MVCC_READ_CONFLICT'
+}
+[A-N1] Aggregated ASYNC batch of 5 update(s) into version 8
+2026-03-28T01:53:42.596Z - [31merror[39m: [Transaction]: Error: No valid responses from any peers. Errors:
+    peer=peer0.org1.example.com, status=500, message=async update 1c22c8dc74fd949e7f5b95a3586799b6510142b9981849c7b9da4c5edc7cc175 already consumed
+    peer=peer0.org2.example.com:9051, status=500, message=async update 1c22c8dc74fd949e7f5b95a3586799b6510142b9981849c7b9da4c5edc7cc175 already consumed
+    at newEndorsementError (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/transaction.js:77:12)
+    at getResponsePayload (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/transaction.js:45:23)
+    at Transaction.submit (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/transaction.js:258:28)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async FabricClient.aggregateAsyncBatch (/home/zachary/test/fabric-samples/my-network/nodejs-client/src/flClient.js:294:22)
+    at async FlClient.processAsyncAggregationTick (/home/zachary/test/fabric-samples/my-network/nodejs-client/src/flClient.js:552:24)
+    at async FlClient.waitForAsyncDrain (/home/zachary/test/fabric-samples/my-network/nodejs-client/src/flClient.js:596:7)
+    at async FlClient.trainAsync (/home/zachary/test/fabric-samples/my-network/nodejs-client/src/flClient.js:1286:9)
+    at async main (/home/zachary/test/fabric-samples/my-network/nodejs-client/src/flClient.js:1420:7)
+2026-03-28T01:53:42.842Z - [33mwarn[39m: [TransactionEventHandler]: strategyFail: commit failure for transaction "ee8780454cefe60fd12e4dad598960bcdc4fea29845f3b91a6f28cd41bc9208a": TransactionError: Commit of transaction ee8780454cefe60fd12e4dad598960bcdc4fea29845f3b91a6f28cd41bc9208a failed on peer peer2.org2.example.com:9251 with status MVCC_READ_CONFLICT
+    at TransactionEventHandler.eventCallback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/transactioneventhandler.js:111:31)
+    at CommitListenerSession.notifyListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:101:18)
+    at EventListener.callback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:92:18)
+    at EventListener.onEvent (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventListener.js:124:10)
+    at EventService._callTransactionListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1051:16)
+    at EventService._processTxEvents (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1006:12)
+    at ClientDuplexStreamImpl.<anonymous> (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:481:12)
+    at ClientDuplexStreamImpl.emit (node:events:517:28)
+    at addChunk (node:internal/streams/readable:368:12)
+    at readableAddChunk (node:internal/streams/readable:341:9) {
+  transactionId: 'ee8780454cefe60fd12e4dad598960bcdc4fea29845f3b91a6f28cd41bc9208a',
+  transactionCode: 'MVCC_READ_CONFLICT'
+}
+2026-03-28T01:53:43.564Z - [33mwarn[39m: [TransactionEventHandler]: strategyFail: commit failure for transaction "ac45c18d303df01167a33be4f42511fddccc25c2260550daef689a36a2e318e7": TransactionError: Commit of transaction ac45c18d303df01167a33be4f42511fddccc25c2260550daef689a36a2e318e7 failed on peer peer1.org1.example.com:7151 with status MVCC_READ_CONFLICT
+    at TransactionEventHandler.eventCallback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/transactioneventhandler.js:111:31)
+    at CommitListenerSession.notifyListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:101:18)
+    at EventListener.callback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:92:18)
+    at EventListener.onEvent (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventListener.js:124:10)
+    at EventService._callTransactionListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1051:16)
+    at EventService._processTxEvents (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1006:12)
+    at ClientDuplexStreamImpl.<anonymous> (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:481:12)
+    at ClientDuplexStreamImpl.emit (node:events:517:28)
+    at addChunk (node:internal/streams/readable:368:12)
+    at readableAddChunk (node:internal/streams/readable:341:9) {
+  transactionId: 'ac45c18d303df01167a33be4f42511fddccc25c2260550daef689a36a2e318e7',
+  transactionCode: 'MVCC_READ_CONFLICT'
+}
+[B-N3] Submitted ASYNC update (txId=1f98386109ac532d0ad32812eeb3d82f65ff2f4c7f057de6b0a834d0c4d09e59, baselineVersion=7)
+[B-N3] Updated CNN model from global (184586 params)
+[B-N3] Global model saved to models/mnist/async/global-model-version-8.json
+[B-N3] Applied global model v8 at step 6
+[B-N3] Training for 1 epoch...
+[B-N1] Updated CNN model from global (184586 params)
+[B-N3] Epoch training complete
+[B-N1] Global model saved to models/mnist/async/global-model-version-8.json
+[B-N1] Applied global model v8 at step 9
+[B-N1] Training for 1 epoch...
+[B-N2] Updated CNN model from global (184586 params)
+[B-N2] Global model saved to models/mnist/async/global-model-version-8.json
+[B-N2] Applied global model v8 at step 7
+[B-N2] Training for 1 epoch...
+[B-N3] Submitted ASYNC update (txId=460a1f539d7f5791aa924b64e41c33afa89d887075c920d70b0e760ebcb25364, baselineVersion=8)
+[B-N3] Training for 1 epoch...
+[B-N1] Epoch training complete
+[B-N2] Epoch training complete
+[B-N3] Epoch training complete
+[B-N1] Submitted ASYNC update (txId=b3eb8098e88ec574d14c6bbc2b19113a6ecee27c5f0fa95bbdd956dbe98fc55c, baselineVersion=8)
+[B-N2] Submitted ASYNC update (txId=aadfcc753e819d9fb9802822145e280aa9b6003502e852265d57f14d9465ec11, baselineVersion=8)
+[B-N3] Submitted ASYNC update (txId=f5cc8491b0d09cb6247b88d5e35e607ed9a2a5a02f71a11016de6325babe7241, baselineVersion=8)
+[A-N1] Aggregated ASYNC batch of 5 update(s) into version 9
+2026-03-28T01:53:54.180Z - [33mwarn[39m: [TransactionEventHandler]: strategyFail: commit failure for transaction "d35a5e2075dc15369a95b313e6207b07a2011280e38fafb89d5bb17c77b67063": TransactionError: Commit of transaction d35a5e2075dc15369a95b313e6207b07a2011280e38fafb89d5bb17c77b67063 failed on peer peer1.org1.example.com:7151 with status MVCC_READ_CONFLICT
+    at TransactionEventHandler.eventCallback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/transactioneventhandler.js:111:31)
+    at CommitListenerSession.notifyListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:101:18)
+    at EventListener.callback (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-network/lib/impl/event/commitlistenersession.js:92:18)
+    at EventListener.onEvent (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventListener.js:124:10)
+    at EventService._callTransactionListener (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1051:16)
+    at EventService._processTxEvents (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:1006:12)
+    at ClientDuplexStreamImpl.<anonymous> (/home/zachary/test/fabric-samples/my-network/nodejs-client/node_modules/fabric-common/lib/EventService.js:481:12)
+    at ClientDuplexStreamImpl.emit (node:events:517:28)
+    at addChunk (node:internal/streams/readable:368:12)
+    at readableAddChunk (node:internal/streams/readable:341:9) {
+  transactionId: 'd35a5e2075dc15369a95b313e6207b07a2011280e38fafb89d5bb17c77b67063',
+  transactionCode: 'MVCC_READ_CONFLICT'
+}
+[B-N3] Updated CNN model from global (184586 params)
+[B-N3] Global model saved to models/mnist/async/global-model-version-9.json
+[B-N3] Applied global model v9 at step 8
+[B-N3] Training for 1 epoch...
+[A-N1] ASYNC training completed: 10 steps
+[A-N2] ASYNC training completed: 10 steps
+[A-N1] Cleaned up
+[A-N2] Cleaned up
+[2026-03-28T01:53:56.108Z] [INFO] [LAUNCHER] A-N1 exited normally
+[2026-03-28T01:53:56.141Z] [INFO] [LAUNCHER] A-N2 exited normally
+[B-N3] Epoch training complete
+[B-N3] Submitted ASYNC update (txId=1bd2dc475d25aca5b8428318e6012186ddf61cadbb89e6d2bac7016487b108ca, baselineVersion=9)
+[B-N3] Training for 1 epoch...
+[B-N2] Updated CNN model from global (184586 params)
+[B-N2] Global model saved to models/mnist/async/global-model-version-9.json
+[B-N2] Applied global model v9 at step 8
+[B-N2] Training for 1 epoch...
+[B-N3] Epoch training complete
+[B-N3] Submitted ASYNC update (txId=e4961efd30dec09c0675d35eb942c882c820b512d2be0c64030f74a3e8832d5a, baselineVersion=9)
+[B-N2] Epoch training complete
+[B-N2] Submitted ASYNC update (txId=f5dfec61f5f32eb49f3c3d837d8d4f549dde565fd2135c5725b6e3f2bd0604b2, baselineVersion=9)
+[B-N2] Training for 1 epoch...
+[B-N2] Epoch training complete
+[B-N2] Submitted ASYNC update (txId=d2dbd7409ba5c5dc63ee53787d46ada798d49fae2b2afae4e0acb2612c9b4567, baselineVersion=9)
+[B-N1] Aggregated ASYNC batch of 4 update(s) into version 10
+[B-N1] ASYNC training completed: 10 steps
+[B-N1] Cleaned up
+[2026-03-28T01:54:14.798Z] [INFO] [LAUNCHER] B-N1 exited normally
+[B-N2] Updated CNN model from global (184586 params)
+[B-N2] Global model saved to models/mnist/async/global-model-version-10.json
+[B-N2] Applied global model v10 at step 10
+[B-N3] Aggregated ASYNC batch of 1 update(s) into version 11
+[B-N3] ASYNC training completed: 10 steps
+[B-N3] Cleaned up
+[B-N2] ASYNC training completed: 10 steps
+[2026-03-28T01:54:19.517Z] [INFO] [LAUNCHER] B-N3 exited normally
+[B-N2] Cleaned up
+[2026-03-28T01:54:19.975Z] [INFO] [LAUNCHER] B-N2 exited normally
+[2026-03-28T01:54:19.975Z] [INFO] 
+[LAUNCHER] All clients completed
+[2026-03-28T01:54:19.975Z] [INFO] 
+[LAUNCHER] Evaluating saved global models...
+Evaluating dataset: mnist
+Mode: all rounds (10 files)
+Model file: /home/zachary/test/fabric-samples/my-network/nodejs-client/models/mnist/async/global-model-version-1.json
+Loading test data (max 20000 samples)...
+MNIST metrics -> loss=2.243364, accuracy=49.77%, precision=70.04%, recall=49.34%, F1=44.20%, samples=10000
+Evaluation saved: /home/zachary/test/fabric-samples/my-network/nodejs-client/reports/evaluations/mnist/evaluation-round-1.json
+Model file: /home/zachary/test/fabric-samples/my-network/nodejs-client/models/mnist/async/global-model-version-2.json
+Loading test data (max 20000 samples)...
+MNIST metrics -> loss=1.930246, accuracy=88.70%, precision=89.18%, recall=88.62%, F1=88.54%, samples=10000
+Evaluation saved: /home/zachary/test/fabric-samples/my-network/nodejs-client/reports/evaluations/mnist/evaluation-round-2.json
+Model file: /home/zachary/test/fabric-samples/my-network/nodejs-client/models/mnist/async/global-model-version-3.json
+Loading test data (max 20000 samples)...
+MNIST metrics -> loss=1.348483, accuracy=91.36%, precision=91.56%, recall=91.26%, F1=91.24%, samples=10000
+Evaluation saved: /home/zachary/test/fabric-samples/my-network/nodejs-client/reports/evaluations/mnist/evaluation-round-3.json
+Model file: /home/zachary/test/fabric-samples/my-network/nodejs-client/models/mnist/async/global-model-version-4.json
+Loading test data (max 20000 samples)...
+MNIST metrics -> loss=0.887725, accuracy=93.05%, precision=93.07%, recall=92.97%, F1=92.98%, samples=10000
+Evaluation saved: /home/zachary/test/fabric-samples/my-network/nodejs-client/reports/evaluations/mnist/evaluation-round-4.json
+Model file: /home/zachary/test/fabric-samples/my-network/nodejs-client/models/mnist/async/global-model-version-5.json
+Loading test data (max 20000 samples)...
+MNIST metrics -> loss=0.638607, accuracy=93.37%, precision=93.39%, recall=93.29%, F1=93.30%, samples=10000
+Evaluation saved: /home/zachary/test/fabric-samples/my-network/nodejs-client/reports/evaluations/mnist/evaluation-round-5.json
+Model file: /home/zachary/test/fabric-samples/my-network/nodejs-client/models/mnist/async/global-model-version-6.json
+Loading test data (max 20000 samples)...
+MNIST metrics -> loss=0.474693, accuracy=93.80%, precision=93.81%, recall=93.73%, F1=93.75%, samples=10000
+Evaluation saved: /home/zachary/test/fabric-samples/my-network/nodejs-client/reports/evaluations/mnist/evaluation-round-6.json
+Model file: /home/zachary/test/fabric-samples/my-network/nodejs-client/models/mnist/async/global-model-version-7.json
+Loading test data (max 20000 samples)...
+MNIST metrics -> loss=0.389774, accuracy=94.14%, precision=94.14%, recall=94.09%, F1=94.10%, samples=10000
+Evaluation saved: /home/zachary/test/fabric-samples/my-network/nodejs-client/reports/evaluations/mnist/evaluation-round-7.json
+Model file: /home/zachary/test/fabric-samples/my-network/nodejs-client/models/mnist/async/global-model-version-8.json
+Loading test data (max 20000 samples)...
+MNIST metrics -> loss=0.318824, accuracy=94.45%, precision=94.47%, recall=94.39%, F1=94.41%, samples=10000
+Evaluation saved: /home/zachary/test/fabric-samples/my-network/nodejs-client/reports/evaluations/mnist/evaluation-round-8.json
+Model file: /home/zachary/test/fabric-samples/my-network/nodejs-client/models/mnist/async/global-model-version-9.json
+Loading test data (max 20000 samples)...
+MNIST metrics -> loss=0.272914, accuracy=94.71%, precision=94.73%, recall=94.66%, F1=94.68%, samples=10000
+Evaluation saved: /home/zachary/test/fabric-samples/my-network/nodejs-client/reports/evaluations/mnist/evaluation-round-9.json
+Model file: /home/zachary/test/fabric-samples/my-network/nodejs-client/models/mnist/async/global-model-version-10.json
+Loading test data (max 20000 samples)...
+MNIST metrics -> loss=0.243264, accuracy=94.96%, precision=94.99%, recall=94.91%, F1=94.93%, samples=10000
+Evaluation saved: /home/zachary/test/fabric-samples/my-network/nodejs-client/reports/evaluations/mnist/evaluation-round-10.json
+[2026-03-28T01:54:54.901Z] [INFO] 
+[LAUNCHER] Generating training report...
+📊 Loaded 10 evaluation file(s): rounds 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+✅ Report generated: /home/zachary/test/fabric-samples/my-network/nodejs-client/reports/fl-training-report-mnist.html
+
+📂 Open in browser: file:///home/zachary/test/fabric-samples/my-network/nodejs-client/reports/fl-training-report-mnist.html
+[2026-03-28T01:54:55.355Z] [INFO] [LAUNCHER] Timing summary written to reports/timing/2026-03-28T01-52-25-659Z-mnist-async-10r/run-summary.json
