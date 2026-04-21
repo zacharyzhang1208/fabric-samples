@@ -9,7 +9,9 @@
     "set": "node src/cli.js set",
     "get": "node src/cli.js get",
     "fl": "node src/cli.js fl:run",
-    "report": "node src/generateReport.js"
+    "report": "node src/generateReport.js",
+    "download:mnist": "node src/utils/downloadMNIST.js",
+    "download:cifar": "node src/utils/downloadCIFAR.js"
   },
   "engines": {
     "node": ">=18"

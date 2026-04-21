@@ -215,6 +215,10 @@ function buildClientFabricClient(options) {
       return this.submit('AggregationContract:InitSyncRound', round, expectedParticipants);
     }
 
+    async initCentralizedRound(round, expectedParticipants = 2) {
+      return this.submit('AggregationContract:InitCentralizedRound', round, expectedParticipants);
+    }
+
     async initHierarchicalRound(round, expectedOrgs, org1ExpectedNodes, org2ExpectedNodes) {
       return this.submit(
         'AggregationContract:InitHierarchicalRound',
@@ -250,12 +254,42 @@ function buildClientFabricClient(options) {
       );
     }
 
+    async submitLocalUpdateCentralized(collection, round, nodeID, weightsJson, sampleCount) {
+      return this.submit(
+        'AggregationContract:SubmitLocalUpdateCentralized',
+        collection,
+        round,
+        nodeID,
+        weightsJson,
+        sampleCount
+      );
+    }
+
     async finalizeSyncRound(round) {
       return this.submit('AggregationContract:FinalizeSyncRound', round);
     }
 
+    async finalizeCentralizedRound(round) {
+      return this.submit('AggregationContract:FinalizeCentralizedRound', round);
+    }
+
     async getRoundStatus(round) {
       const result = await this.evaluate('AggregationContract:GetRoundStatus', round);
+      return JSON.parse(result.toString());
+    }
+
+    async getSyncAggregationTiming(round) {
+      const result = await this.evaluate('AggregationContract:GetSyncAggregationTiming', round);
+      return JSON.parse(result.toString());
+    }
+
+    async getCentralizedAggregationTiming(round) {
+      const result = await this.evaluate('AggregationContract:GetCentralizedAggregationTiming', round);
+      return JSON.parse(result.toString());
+    }
+
+    async getAsyncAggregationTiming(version) {
+      const result = await this.evaluate('AggregationContract:GetAsyncAggregationTiming', version);
       return JSON.parse(result.toString());
     }
 
@@ -344,7 +378,7 @@ class FlClient {
     this.fabricClient = null;
     this.model = null;
     this.localData = null;
-    this.mode = options.mode || 'sync';
+    this.mode = String(options.mode || 'sync').toLowerCase();
     this.dataLoader = null;
     
     // Async mode specific fields
@@ -358,11 +392,15 @@ class FlClient {
     this.asyncCommitteeRank = this.asyncCommitteeMembers.indexOf(this.clientId);
     this.isAsyncCommitteeMember = this.mode === 'async' && this.asyncCommitteeRank >= 0;
     this.isAsyncCommitteeLeader = this.isAsyncCommitteeMember && this.asyncCommitteeRank === 0;
+    this.centralizedCoordinatorId = process.env.CENTRALIZED_COORDINATOR || 'A-N1';
+    this.isCentralizedCoordinator = this.mode === 'centralized' && this.clientId === this.centralizedCoordinatorId;
     this.asyncAggregationLoopActive = false;
     this.asyncAggregationLoopPromise = null;
     this.timingRoot = process.env.FL_TIMING_ROOT || path.join(this.projectRoot, 'nodejs-client', 'reports', 'timing', 'adhoc');
     this.runId = process.env.FL_TIMING_RUN_ID || 'adhoc';
     this.timingFilePath = path.join(this.timingRoot, 'clients', `${this.clientId}.json`);
+    this.lastSubmissionTiming = null;
+    this.lastAggregationTiming = null;
     this.timing = {
       runId: this.runId,
       clientId: this.clientId,
@@ -446,6 +484,9 @@ class FlClient {
     } else if (this.dataset === 'mnist') {
       this.localData = await this.dataLoader.load();
       console.log(`[${this.clientId}] Loaded MNIST dataset: ${this.localData.sampleCount} samples`);
+    } else if (this.dataset === 'cifar') {
+      this.localData = await this.dataLoader.load();
+      console.log(`[${this.clientId}] Loaded CIFAR-10 dataset: ${this.localData.sampleCount} samples`);
     } else {
       throw new Error(`Unknown dataset: ${this.dataset}`);
     }
@@ -509,6 +550,7 @@ class FlClient {
 
   async processAsyncAggregationTick(options = {}) {
     const { allowPartial = false } = options;
+    this.lastAggregationTiming = null;
     if (!this.fabricClient) {
       return;
     }
@@ -549,7 +591,13 @@ class FlClient {
       }
 
       try {
+        const phaseStart = Date.now();
         const result = await this.fabricClient.aggregateAsyncBatch(txIds, minUpdates);
+        this.lastAggregationTiming = {
+          globalAggregationMs: Date.now() - phaseStart,
+          aggregatedCount: result ? result.aggregatedCount : null,
+          version: result ? result.version : null,
+        };
         if (result) {
           console.log(
             `[${this.clientId}] Aggregated ASYNC batch of ${result.aggregatedCount} update(s) into version ${result.version}`
@@ -782,8 +830,8 @@ class FlClient {
         verbose: 0,
       });
       xs.dispose();
-    } else if (this.dataset === 'mnist') {
-      // MNIST: reshape images to 28x28x1 format for CNN
+    } else if (this.dataset === 'mnist' || this.dataset === 'cifar') {
+      // MNIST/CIFAR: reshape flattened images to CNN input format
       const images = this.localData.images;
       const labels = this.localData.labels;
       
@@ -792,8 +840,12 @@ class FlClient {
       for (let img of images) {
         imageData.push(...img);
       }
-      
-      const xs = tf.tensor4d(imageData, [images.length, 28, 28, 1]);
+
+      const shape = this.dataset === 'mnist'
+        ? [images.length, 28, 28, 1]
+        : [images.length, 32, 32, 3];
+
+      const xs = tf.tensor4d(imageData, shape);
       const ys = tf.tensor2d(labels);
       
       await this.model.fit(xs, ys, {
@@ -815,7 +867,7 @@ class FlClient {
       const w = weights[0].dataSync()[0]; // weight parameter
       const b = weights[1].dataSync()[0]; // bias parameter
       return [w, b];
-    } else if (this.dataset === 'mnist') {
+    } else if (this.dataset === 'mnist' || this.dataset === 'cifar') {
       // Serialize CNN weights as flattened 1D array
       return this.dataLoader.serializeModelUpdate(this.model);
     }
@@ -828,19 +880,27 @@ class FlClient {
       return false;
     }
 
+    this.lastSubmissionTiming = null;
+
     const update = this.getLocalModelUpdate();
     const value = JSON.stringify(update);
     const collection = this.orgMspId === 'Org1MSP' ? 'vpsaOrg1Shards' : 'vpsaOrg2Shards';
     const nodeID = String(this.nodeId);
+    const branchStartedAtMs = Date.now();
+    let nodeSubmitMs = null;
+    let orgFinalizeMs = null;
+    let globalAggregationMs = null;
 
     try {
-      if (this.mode === 'sync') {
+      if (this.mode === 'sync' || this.mode === 'decentralized') {
         await this.withRetry(
           `InitHierarchicalRound(${epoch})`,
           () => this.fabricClient.initHierarchicalRound(epoch, 2, this.org1NodeCount, this.org2NodeCount),
           { attempts: 8, initialDelayMs: 150, reconnectOnConnectionError: true }
         );
 
+        const aggregationStageStartedAtMs = Date.now();
+        let phaseStart = Date.now();
         await this.withRetry(
           `SubmitLocalNodeUpdateSync(${epoch}, node=${nodeID})`,
           () =>
@@ -853,6 +913,7 @@ class FlClient {
             ),
           { attempts: 10, initialDelayMs: 200, reconnectOnConnectionError: true }
         );
+        nodeSubmitMs = Date.now() - phaseStart;
         console.log(`[${this.clientId}] Submitted node-level SYNC update for epoch ${epoch}`);
 
         // Contract signal 1: wait until all nodes in this org submitted before org finalize.
@@ -867,11 +928,13 @@ class FlClient {
           { attempts: 60, intervalMs: 1000 }
         );
 
+        phaseStart = Date.now();
         await this.withRetry(
           `FinalizeOrgSyncRound(${epoch})`,
           () => this.fabricClient.finalizeOrgSyncRound(epoch),
           { attempts: 20, initialDelayMs: 250, reconnectOnConnectionError: true }
         );
+        orgFinalizeMs = Date.now() - phaseStart;
         console.log(`[${this.clientId}] Finalized org-level sync epoch ${epoch}`);
 
         // Contract signal 2: wait until both org-level updates are submitted before global finalize.
@@ -886,13 +949,111 @@ class FlClient {
           { attempts: 60, intervalMs: 1000 }
         );
 
+        phaseStart = Date.now();
         await this.withRetry(
           `FinalizeSyncRound(${epoch})`,
           () => this.fabricClient.finalizeSyncRound(epoch),
           { attempts: 30, initialDelayMs: 250, reconnectOnConnectionError: true }
         );
+        const syncAggregationTiming = await this.withRetry(
+          `GetSyncAggregationTiming(${epoch})`,
+          () => this.fabricClient.getSyncAggregationTiming(epoch),
+          { attempts: 8, initialDelayMs: 100, reconnectOnConnectionError: true, treatIdempotentAsSuccess: false }
+        );
+        globalAggregationMs = syncAggregationTiming.durationMs;
+        this.lastSubmissionTiming = {
+          nodeSubmitMs,
+          orgFinalizeMs,
+          globalAggregationMs,
+          stageTotalMs: globalAggregationMs,
+          chaincodeStartedAtMs: syncAggregationTiming.startedAt,
+          chaincodeEndedAtMs: syncAggregationTiming.endedAt,
+        };
         console.log(`[${this.clientId}] Finalized sync epoch ${epoch}`);
+      } else if (this.mode === 'centralized') {
+        if (this.isCentralizedCoordinator) {
+          await this.withRetry(
+            `InitCentralizedRound(${epoch})`,
+            () => this.fabricClient.initCentralizedRound(epoch, this.org1NodeCount + this.org2NodeCount),
+            { attempts: 8, initialDelayMs: 150, reconnectOnConnectionError: true }
+          );
+        }
+
+        let phaseStart = Date.now();
+        await this.withRetry(
+          `SubmitLocalUpdateCentralized(${epoch}, node=${nodeID})`,
+          () =>
+            this.fabricClient.submitLocalUpdateCentralized(
+              collection,
+              epoch,
+              nodeID,
+              value,
+              this.localData.sampleCount
+            ),
+          { attempts: 10, initialDelayMs: 200, reconnectOnConnectionError: true }
+        );
+        nodeSubmitMs = Date.now() - phaseStart;
+        console.log(`[${this.clientId}] Submitted node-level CENTRALIZED update for epoch ${epoch}`);
+
+        if (this.isCentralizedCoordinator) {
+          await this.waitForContractSignal(
+            `CentralizedRoundReady(${epoch})`,
+            () => this.fabricClient.getRoundStatus(epoch),
+            (status) =>
+              status &&
+              Array.isArray(status.submittedNodes) &&
+              Number.isInteger(status.expectedCount) &&
+              status.submittedNodes.length >= status.expectedCount,
+            { attempts: 60, intervalMs: 1000 }
+          );
+
+          phaseStart = Date.now();
+          await this.withRetry(
+            `FinalizeCentralizedRound(${epoch})`,
+            () => this.fabricClient.finalizeCentralizedRound(epoch),
+            { attempts: 30, initialDelayMs: 250, reconnectOnConnectionError: true }
+          );
+          const centralizedAggregationTiming = await this.withRetry(
+            `GetCentralizedAggregationTiming(${epoch})`,
+            () => this.fabricClient.getCentralizedAggregationTiming(epoch),
+            { attempts: 8, initialDelayMs: 100, reconnectOnConnectionError: true, treatIdempotentAsSuccess: false }
+          );
+          globalAggregationMs = centralizedAggregationTiming.durationMs;
+          this.lastSubmissionTiming = {
+            nodeSubmitMs,
+            orgFinalizeMs,
+            globalAggregationMs,
+            stageTotalMs: globalAggregationMs,
+            chaincodeStartedAtMs: centralizedAggregationTiming.startedAt,
+            chaincodeEndedAtMs: centralizedAggregationTiming.endedAt,
+          };
+          console.log(`[${this.clientId}] Finalized centralized epoch ${epoch}`);
+        } else {
+          await this.waitForContractSignal(
+            `CentralizedRoundFinalized(${epoch})`,
+            () => this.fabricClient.getRoundStatus(epoch),
+            (status) => status && status.aggregationDone === true,
+            { attempts: 60, intervalMs: 1000 }
+          );
+
+          const centralizedAggregationTiming = await this.withRetry(
+            `GetCentralizedAggregationTiming(${epoch})`,
+            () => this.fabricClient.getCentralizedAggregationTiming(epoch),
+            { attempts: 8, initialDelayMs: 100, reconnectOnConnectionError: true, treatIdempotentAsSuccess: false }
+          );
+          globalAggregationMs = centralizedAggregationTiming.durationMs;
+          this.lastSubmissionTiming = {
+            nodeSubmitMs,
+            orgFinalizeMs,
+            globalAggregationMs,
+            stageTotalMs: globalAggregationMs,
+            chaincodeStartedAtMs: centralizedAggregationTiming.startedAt,
+            chaincodeEndedAtMs: centralizedAggregationTiming.endedAt,
+          };
+          console.log(`[${this.clientId}] Observed centralized epoch ${epoch} completion`);
+        }
       } else {
+        const phaseStart = Date.now();
         const submitResult = await this.withRetry(
           'SubmitLocalUpdateAsync',
           () =>
@@ -904,10 +1065,17 @@ class FlClient {
             ),
           { attempts: 8, initialDelayMs: 200, reconnectOnConnectionError: true }
         );
+        nodeSubmitMs = Date.now() - phaseStart;
 
         console.log(
           `[${this.clientId}] Submitted ASYNC update (txId=${submitResult.txId}, baselineVersion=${this.currentBaselineVersion || 0})`
         );
+        this.lastSubmissionTiming = {
+          nodeSubmitMs,
+          orgFinalizeMs,
+          globalAggregationMs,
+          stageTotalMs: Date.now() - branchStartedAtMs,
+        };
       }
       return true;
     } catch (err) {
@@ -960,13 +1128,13 @@ class FlClient {
       return false;
     };
 
-    // Query with retry for sync mode (global model may not be committed on this peer immediately)
+    // Query with retry for modes that publish a round-scoped global model.
     const retryQuerySync = async () => {
       let lastError = null;
       for (let attempt = 1; attempt <= 10; attempt++) {
         try {
           const globalModel = await this.fabricClient.getGlobalModel(epoch);
-          console.log(`[${this.clientId}] Retrieved SYNC global model for epoch ${epoch}`);
+          console.log(`[${this.clientId}] Retrieved ${this.mode.toUpperCase()} global model for epoch ${epoch}`);
           return globalModel;
         } catch (err) {
           lastError = err;
@@ -1000,7 +1168,7 @@ class FlClient {
     };
 
     try {
-      if (this.mode === 'sync') {
+      if (this.mode === 'sync' || this.mode === 'decentralized' || this.mode === 'centralized') {
         await waitForSyncRoundFinalized();
         return await retryQuerySync();
       }
@@ -1016,12 +1184,11 @@ class FlClient {
   }
 
   updateModelFromGlobal(globalModel) {
+    this.modelInitValid = false;
     if (!globalModel) return;
-
     try {
       const parsed = JSON.parse(globalModel.modelData);
       const refreshedModel = this.dataLoader.buildModel();
-      
       if (this.dataset === 'linear') {
         // Linear format: [w, b]
         if (!Array.isArray(parsed) || parsed.length < 2) {
@@ -1034,18 +1201,25 @@ class FlClient {
           tf.tensor2d([w], [1, 1]),
           tf.tensor1d([b]),
         ]);
+        this.modelInitValid = true;
         console.log(`[${this.clientId}] Updated local model from global: w=${w}, b=${b}`);
-      } else if (this.dataset === 'mnist') {
+      } else if (this.dataset === 'mnist' || this.dataset === 'cifar') {
         // CNN format: flattened 1D array, use dataLoader to unflatten
         if (!Array.isArray(parsed)) {
           console.log(`[${this.clientId}] Global modelData format invalid, expected array`);
           refreshedModel.dispose();
           return;
         }
-        this.dataLoader.deserializeGlobalModel(parsed, refreshedModel);
-        console.log(`[${this.clientId}] Updated CNN model from global (${parsed.length} params)`);
+        try {
+          this.dataLoader.deserializeGlobalModel(parsed, refreshedModel);
+          this.modelInitValid = true;
+          console.log(`[${this.clientId}] Updated ${this.dataset.toUpperCase()} CNN model from global (${parsed.length} params)`);
+        } catch (e) {
+          console.log(`[${this.clientId}] Global modelData shape mismatch: ${e.message}`);
+          refreshedModel.dispose();
+          return;
+        }
       }
-
       if (this.model) {
         this.model.dispose();
       }
@@ -1056,6 +1230,7 @@ class FlClient {
   }
 
   async loadLatestGlobalModel() {
+    this.modelInitValid = false;
     try {
       console.log(`[${this.clientId}] Checking for latest global model on chain...`);
       if (this.mode === 'async') {
@@ -1064,31 +1239,38 @@ class FlClient {
           console.log(`[${this.clientId}] No previous async versions found, starting fresh`);
           return 0;
         }
-
         const globalModel = await this.fabricClient.getGlobalModelByVersion(latestVersion);
         if (globalModel && globalModel.modelData) {
           this.updateModelFromGlobal(globalModel);
-          this.currentBaselineVersion = latestVersion;
-          this.latestAvailableVersion = latestVersion;
-          console.log(`[${this.clientId}] Successfully initialized from async version ${latestVersion}`);
-          return latestVersion;
+          if (this.modelInitValid) {
+            this.currentBaselineVersion = latestVersion;
+            this.latestAvailableVersion = latestVersion;
+            console.log(`[${this.clientId}] Successfully initialized from async version ${latestVersion}`);
+            return latestVersion;
+          } else {
+            console.log(`[${this.clientId}] Global model shape mismatch, using random initialization`);
+            return 0;
+          }
         }
         console.log(`[${this.clientId}] Async global model v${latestVersion} missing, using random initialization`);
         return 0;
       }
-
       const currentRound = await this.fabricClient.getCurrentRound();
       if (currentRound === 0) {
         console.log(`[${this.clientId}] No previous training rounds found, starting fresh`);
         return 0;
       }
-
       console.log(`[${this.clientId}] Found completed round ${currentRound}, loading global model...`);
       const globalModel = await this.fabricClient.getGlobalModel(currentRound);
       if (globalModel && globalModel.modelData) {
         this.updateModelFromGlobal(globalModel);
-        console.log(`[${this.clientId}] Successfully initialized from round ${currentRound} model`);
-        return currentRound;
+        if (this.modelInitValid) {
+          console.log(`[${this.clientId}] Successfully initialized from round ${currentRound} model`);
+          return currentRound;
+        } else {
+          console.log(`[${this.clientId}] Global model shape mismatch, using random initialization`);
+          return 0;
+        }
       }
       console.log(`[${this.clientId}] Global model not found for round ${currentRound}, using random initialization`);
       return 0;
@@ -1211,6 +1393,13 @@ class FlClient {
         phaseStart = Date.now();
         const submitted = await this.submitUpdateToChain(completedStep); // Use step as version hint
         stepTiming.submitUpdateMs = Date.now() - phaseStart;
+        if (this.lastSubmissionTiming) {
+          stepTiming.globalAggregationMs = this.lastSubmissionTiming.globalAggregationMs;
+          stepTiming.chaincodeAggregationMs = this.lastSubmissionTiming.globalAggregationMs;
+          stepTiming.nodeSubmitMs = this.lastSubmissionTiming.nodeSubmitMs;
+          stepTiming.orgFinalizeMs = this.lastSubmissionTiming.orgFinalizeMs;
+          stepTiming.stageTotalMs = this.lastSubmissionTiming.stageTotalMs;
+        }
         if (!submitted) {
           stepTiming.status = 'submit-failed';
           console.log(`[${this.clientId}] Async submit failed at step ${completedStep}, stopping`);
@@ -1227,6 +1416,12 @@ class FlClient {
           try {
             await this.processAsyncAggregationTick();
             stepTiming.asyncAggregateTickMs = Date.now() - phaseStart;
+            if (this.lastAggregationTiming) {
+              stepTiming.globalAggregationMs = this.lastAggregationTiming.globalAggregationMs;
+              stepTiming.chaincodeAggregationMs = this.lastAggregationTiming.globalAggregationMs;
+              stepTiming.asyncAggregatedCount = this.lastAggregationTiming.aggregatedCount;
+              stepTiming.asyncAggregationVersion = this.lastAggregationTiming.version;
+            }
           } catch (err) {
             console.warn(`[${this.clientId}] Async aggregate tick skipped: ${this.getErrMessage(err)}`);
           }
@@ -1348,8 +1543,9 @@ async function main() {
     .option('mode', {
       type: 'string',
       default: 'sync',
-      choices: ['sync', 'async'],
-      describe: 'FL mode: sync or async',
+      coerce: (value) => String(value).toLowerCase(),
+      choices: ['sync', 'decentralized', 'centralized', 'async'],
+      describe: 'FL mode: sync/decentralized, centralized, or async',
     })
     .option('org1-node-count', {
       type: 'number',
@@ -1364,12 +1560,12 @@ async function main() {
     .option('dataset', {
       type: 'string',
       default: 'linear',
-      describe: 'Dataset to use: linear, mnist',
+      describe: 'Dataset to use: linear, mnist, cifar',
     })
     .option('mnist-samples', {
       type: 'number',
       default: 20000,
-      describe: 'Total MNIST training samples to load before partitioning',
+      describe: 'Total classification training samples (MNIST/CIFAR) to load before partitioning',
     })
     .parse();
 
@@ -1419,8 +1615,9 @@ async function main() {
       console.log(`[${client.clientId}] Using asynchronous training loop (no round barrier)`);
       await client.trainAsync(argv.epochs);
     } else {
-      // SYNC MODE: Traditional round-based synchronous training (original logic)
-      console.log(`[${client.clientId}] Using synchronous training loop (with round barrier)`);
+      // SYNC/CENTRALIZED MODE: Round-based training with on-chain aggregation barrier.
+      const modeLabel = argv.mode === 'centralized' ? 'centralized' : 'synchronous';
+      console.log(`[${client.clientId}] Using ${modeLabel} training loop (with round barrier)`);
       // FL training: each epoch triggers one round of aggregation
       for (let epoch = 1; epoch <= argv.epochs; epoch++) {
         const currentRound = lastCompletedRound + epoch;
@@ -1447,6 +1644,13 @@ async function main() {
       phaseStart = Date.now();
       const submitted = await client.submitUpdateToChain(currentRound);
       roundTiming.submitUpdateMs = Date.now() - phaseStart;
+        if (client.lastSubmissionTiming) {
+          roundTiming.globalAggregationMs = client.lastSubmissionTiming.globalAggregationMs;
+          roundTiming.chaincodeAggregationMs = client.lastSubmissionTiming.globalAggregationMs;
+          roundTiming.nodeSubmitMs = client.lastSubmissionTiming.nodeSubmitMs;
+          roundTiming.orgFinalizeMs = client.lastSubmissionTiming.orgFinalizeMs;
+          roundTiming.stageTotalMs = client.lastSubmissionTiming.stageTotalMs;
+        }
       if (!submitted) {
         roundTiming.status = 'submit-failed';
         roundTiming.endedAt = new Date().toISOString();
@@ -1459,8 +1663,8 @@ async function main() {
         break;
       }
 
-      // Contract-signal flow: sync mode directly enters status-driven query path.
-      if (argv.mode === 'sync') {
+      // Contract-signal flow: sync and centralized modes directly enter status-driven query path.
+      if (argv.mode === 'sync' || argv.mode === 'decentralized' || argv.mode === 'centralized') {
         console.log(`[${client.clientId}] Waiting for on-chain ready signal...`);
       } else {
         // Async mode keeps a short settle delay to avoid immediate hot polling.

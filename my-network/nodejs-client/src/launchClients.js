@@ -118,6 +118,7 @@ function launchClient(config, epochs, mode, dataset = 'linear', mnistSamples = 2
       ...process.env,
       TF_CPP_MIN_LOG_LEVEL: process.env.TF_CPP_MIN_LOG_LEVEL || '2',
       ASYNC_COMMITTEE_LEADER: process.env.ASYNC_COMMITTEE_LEADER || 'A-N1',
+      CENTRALIZED_COORDINATOR: process.env.CENTRALIZED_COORDINATOR || 'A-N1',
     },
   });
 
@@ -140,7 +141,14 @@ function launchClient(config, epochs, mode, dataset = 'linear', mnistSamples = 2
 
 async function main() {
   const epochs = process.argv[2] ? Number(process.argv[2]) : 10;
-  const mode = process.argv[3] || 'sync';
+  const modeArg = process.argv[3];
+  if (!modeArg) {
+    console.error('[LAUNCHER] Missing required mode argument.');
+    console.error('[LAUNCHER] Usage: node src/launchClients.js <epochs> <mode> [dataset] [mnistSamples]');
+    console.error('[LAUNCHER] Example: node src/launchClients.js 10 decentralized mnist 20000');
+    process.exit(1);
+  }
+  const mode = String(modeArg).toLowerCase();
   const dataset = process.argv[4] || 'linear';
   const mnistSamples = process.argv[5] ? Number(process.argv[5]) : 20000;
   const runId = createRunId({ dataset, mode, epochs });
@@ -183,12 +191,15 @@ async function main() {
   console.log(`[LAUNCHER] Starting ${CLIENTS.length} FL clients`);
   console.log(`[LAUNCHER] Topology: Bank A (Org1) - 2 nodes, Bank B (Org2) - 3 nodes`);
   console.log(`[LAUNCHER] Configuration: epochs=${epochs}, mode=${mode}, dataset=${dataset}`);
+  if (mode === 'centralized') {
+    console.log(`[LAUNCHER] Centralized coordinator: ${process.env.CENTRALIZED_COORDINATOR || 'A-N1'}`);
+  }
   console.log(`[LAUNCHER] Timing run ID: ${runId}`);
-  if (dataset === 'mnist') {
-    console.log(`[LAUNCHER] MNIST samples: ${mnistSamples}`);
+  if (dataset === 'mnist' || dataset === 'cifar') {
+    console.log(`[LAUNCHER] ${dataset.toUpperCase()} samples: ${mnistSamples}`);
   }
   console.log(`[LAUNCHER] Usage: node launchClients.js [epochs] [mode] [dataset] [mnistSamples]`);
-  console.log(`[LAUNCHER] Example: node launchClients.js 10 sync linear\n`);
+  console.log(`[LAUNCHER] Example: node launchClients.js 10 centralized linear\n`);
   
   const { DataLoaderFactory } = require('./dataLoaders');
   const availableDatasets = DataLoaderFactory.getAvailable();
@@ -314,6 +325,16 @@ async function main() {
   const submitDurations = clientTimings.flatMap((client) =>
     Array.isArray(client.rounds) ? client.rounds.map((round) => round.submitUpdateMs) : []
   );
+  const globalAggregationDurations = clientTimings.flatMap((client) =>
+    Array.isArray(client.rounds)
+      ? client.rounds.map((round) => round.globalAggregationMs).filter((value) => Number.isFinite(value))
+      : []
+  );
+  const chaincodeAggregationDurations = clientTimings.flatMap((client) =>
+    Array.isArray(client.rounds)
+      ? client.rounds.map((round) => round.chaincodeAggregationMs).filter((value) => Number.isFinite(value))
+      : []
+  );
   const queryDurations = clientTimings.flatMap((client) =>
     Array.isArray(client.rounds) ? client.rounds.map((round) => round.queryGlobalModelMs) : []
   );
@@ -338,6 +359,8 @@ async function main() {
     childExitCodes,
     roundTotalMs: summarizeDurations(roundDurations),
     submitUpdateMs: summarizeDurations(submitDurations),
+    globalAggregationMs: summarizeDurations(globalAggregationDurations),
+    chaincodeAggregationMs: summarizeDurations(chaincodeAggregationDurations),
     queryGlobalModelMs: summarizeDurations(queryDurations),
     clients: clientTimings,
   });

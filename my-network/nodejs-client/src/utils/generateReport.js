@@ -25,6 +25,7 @@ const DATASET = (process.argv[2] || process.env.FL_DATASET || 'linear').toLowerC
 const DATASET_TYPES = {
   linear: 'regression',
   mnist:  'classification',
+  cifar:  'classification',
 };
 const TYPE = DATASET_TYPES[DATASET] || 'classification';
 
@@ -425,7 +426,7 @@ function generateLinearHTML(models, latestModel, participation, evals, datasetLa
 </html>`;
 }
 
-// ── Classification (MNIST) report ─────────────────────────────────────────────
+// ── Classification report ─────────────────────────────────────────────────────
 
 function generateClassificationHTML(models, latestModel, participation, evals, datasetLabel) {
   // Build a lookup: round → eval result
@@ -453,6 +454,7 @@ function generateClassificationHTML(models, latestModel, participation, evals, d
     ? +(e.result.overall.f1 * 100).toFixed(2) : null);
   const latestPerClass = latestEval && latestEval.result && latestEval.result.perClass
     ? latestEval.result.perClass : null;
+  const perClassLabel = DATASET === 'mnist' ? 'Digit' : 'Class';
 
   // Per-round table rows (all training rounds; merge eval data where available)
   const tableRows = models.map(m => {
@@ -499,7 +501,7 @@ function generateClassificationHTML(models, latestModel, participation, evals, d
     <div class="card">
       <h2>🔢 Per-Class Breakdown (Round ${latestEval.round})</h2>
       <table>
-        <thead><tr><th>Digit</th><th>Precision</th><th>Recall</th><th>F1-Score</th><th>Support</th></tr></thead>
+        <thead><tr><th>${perClassLabel}</th><th>Precision</th><th>Recall</th><th>F1-Score</th><th>Support</th></tr></thead>
         <tbody>
           ${latestPerClass.map(c => `<tr>
             <td>${c.class}</td>

@@ -38,6 +38,27 @@ yargs(hideBin(process.argv))
     }
   )
   .command(
+    'fl-init-centralized <round> [expectedParticipants]',
+    'Initialize a centralized FL round on training channel',
+    (cmd) => {
+      cmd
+        .positional('round', { type: 'number', describe: 'Round number' })
+        .positional('expectedParticipants', {
+          type: 'number',
+          default: 5,
+          describe: 'Expected total node count',
+        });
+    },
+    async (argv) => {
+      await withClient(async (client) => {
+        await client.initCentralizedRound(argv.round, argv.expectedParticipants);
+        console.log(
+          `CENTRALIZED round initialized: round=${argv.round}, expectedParticipants=${argv.expectedParticipants}`
+        );
+      });
+    }
+  )
+  .command(
     'fl-submit-sync <collection> <round> <weightsJson> <sampleCount>',
     'Submit local model update in synchronous FL mode',
     (cmd) => {
@@ -51,6 +72,30 @@ yargs(hideBin(process.argv))
       await withClient(async (client) => {
         await client.submitLocalUpdateSync(argv.collection, argv.round, argv.weightsJson, argv.sampleCount);
         console.log('SYNC update submitted');
+      });
+    }
+  )
+  .command(
+    'fl-submit-centralized <collection> <round> <nodeID> <weightsJson> <sampleCount>',
+    'Submit local model update in centralized FL mode',
+    (cmd) => {
+      cmd
+        .positional('collection', { type: 'string', describe: 'PDC collection name' })
+        .positional('round', { type: 'number', describe: 'Round number' })
+        .positional('nodeID', { type: 'string', describe: 'Node identifier' })
+        .positional('weightsJson', { type: 'string', describe: 'JSON weights, e.g. [0.1,0.2]' })
+        .positional('sampleCount', { type: 'number', describe: 'Local sample count' });
+    },
+    async (argv) => {
+      await withClient(async (client) => {
+        await client.submitLocalUpdateCentralized(
+          argv.collection,
+          argv.round,
+          argv.nodeID,
+          argv.weightsJson,
+          argv.sampleCount
+        );
+        console.log('CENTRALIZED update submitted');
       });
     }
   )
@@ -81,6 +126,45 @@ yargs(hideBin(process.argv))
       await withClient(async (client) => {
         const model = await client.getGlobalModel(argv.round);
         console.log(JSON.stringify(model, null, 2));
+      });
+    }
+  )
+  .command(
+    'fl-get-centralized-model <round>',
+    'Read aggregated centralized global model for a round',
+    (cmd) => {
+      cmd.positional('round', { type: 'number', describe: 'Round number' });
+    },
+    async (argv) => {
+      await withClient(async (client) => {
+        const model = await client.getGlobalModel(argv.round);
+        console.log(JSON.stringify(model, null, 2));
+      });
+    }
+  )
+  .command(
+    'fl-finalize-centralized <round>',
+    'Finalize a centralized FL round',
+    (cmd) => {
+      cmd.positional('round', { type: 'number', describe: 'Round number' });
+    },
+    async (argv) => {
+      await withClient(async (client) => {
+        await client.finalizeCentralizedRound(argv.round);
+        console.log(`CENTRALIZED round finalized: round=${argv.round}`);
+      });
+    }
+  )
+  .command(
+    'fl-get-centralized-timing <round>',
+    'Read centralized aggregation timing for a round',
+    (cmd) => {
+      cmd.positional('round', { type: 'number', describe: 'Round number' });
+    },
+    async (argv) => {
+      await withClient(async (client) => {
+        const timing = await client.getCentralizedAggregationTiming(argv.round);
+        console.log(JSON.stringify(timing, null, 2));
       });
     }
   )

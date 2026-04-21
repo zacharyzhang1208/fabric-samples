@@ -1,6 +1,6 @@
 /**
  * Pluggable Data Loaders Framework
- * Supports different datasets: linear, mnist
+ * Supports different datasets: linear, mnist, cifar
  * Each loader implements: load(), buildModel(), serialize/deserialize methods
  */
 
@@ -14,6 +14,7 @@ if (!process.env.TF_CPP_MIN_LOG_LEVEL) {
 
 const tf = require('@tensorflow/tfjs-node');
 const MNISTFileLoader = require('./mnistFileLoader');
+const CIFARFileLoader = require('./cifarFileLoader');
 
 /**
  * Base DataLoader class - defines the interface
@@ -226,6 +227,115 @@ class MNISTLoader extends DataLoader {
 }
 
 /**
+ * CIFAR-10 CNN Loader
+ * Requires pre-downloaded CIFAR-10 data via src/utils/downloadCIFAR.js
+ */
+class CIFARLoader extends DataLoader {
+  constructor(clientId, options = {}) {
+    super();
+    this.clientId = clientId;
+    this.trainSamples = Number.isInteger(options.trainSamples) && options.trainSamples > 0
+      ? options.trainSamples
+      : 20000;
+    this.totalNodes = Number.isInteger(options.totalNodes) && options.totalNodes > 0
+      ? options.totalNodes
+      : 5;
+    this.nodeIndex = Number.isInteger(options.nodeIndex) && options.nodeIndex >= 0
+      ? options.nodeIndex
+      : null;
+  }
+
+  async load() {
+    const cifarLoader = new CIFARFileLoader();
+
+    console.log(`[${this.clientId}] Loading CIFAR-10 dataset...`);
+    const { images, labels } = await cifarLoader.loadTrainingData(this.trainSamples);
+
+    const fallbackNodeIndex = parseInt(this.clientId.split('-N')[1], 10) - 1;
+    const nodeIndex = this.nodeIndex !== null ? this.nodeIndex : fallbackNodeIndex;
+    const samplesPerNode = Math.floor(images.length / this.totalNodes);
+    const startIdx = nodeIndex * samplesPerNode;
+    const endIdx = nodeIndex === this.totalNodes - 1 ? images.length : (nodeIndex + 1) * samplesPerNode;
+
+    const nodeImages = images.slice(startIdx, endIdx);
+    const nodeLabels = labels.slice(startIdx, endIdx);
+
+    return {
+      images: nodeImages,
+      labels: nodeLabels,
+      sampleCount: nodeImages.length,
+    };
+  }
+
+  buildModel() {
+    const model = tf.sequential({
+      layers: [
+        tf.layers.conv2d({
+          inputShape: [32, 32, 3],
+          kernelSize: 3,
+          filters: 32,
+          activation: 'relu',
+          padding: 'same',
+        }),
+        tf.layers.maxPooling2d({ poolSize: 2 }),
+        tf.layers.conv2d({
+          kernelSize: 3,
+          filters: 64,
+          activation: 'relu',
+          padding: 'same',
+        }),
+        tf.layers.maxPooling2d({ poolSize: 2 }),
+        tf.layers.flatten(),
+        tf.layers.dense({ units: 128, activation: 'relu' }),
+        tf.layers.dropout({ rate: 0.3 }),
+        tf.layers.dense({ units: 10, activation: 'softmax' }),
+      ],
+    });
+
+    model.compile({
+      optimizer: tf.train.adam(0.001),
+      loss: 'categoricalCrossentropy',
+      metrics: ['accuracy'],
+    });
+
+    return model;
+  }
+
+  serializeModelUpdate(model) {
+    const weights = model.getWeights();
+    let flatWeights = [];
+
+    for (const w of weights) {
+      flatWeights = flatWeights.concat(Array.from(w.dataSync()));
+    }
+
+    return flatWeights;
+  }
+
+  deserializeGlobalModel(weightsArray, model) {
+    if (!Array.isArray(weightsArray)) {
+      console.error('deserializeGlobalModel expects array, got:', typeof weightsArray);
+      return;
+    }
+
+    const currentWeights = model.getWeights();
+    const shapes = currentWeights.map((w) => w.shape);
+    const newWeights = [];
+
+    let offset = 0;
+    for (let i = 0; i < shapes.length; i++) {
+      const shape = shapes[i];
+      const size = shape.reduce((a, b) => a * b, 1);
+      const slice = weightsArray.slice(offset, offset + size);
+      newWeights.push(tf.tensor(slice, shape));
+      offset += size;
+    }
+
+    model.setWeights(newWeights);
+  }
+}
+
+/**
  * Data Loader Factory
  */
 class DataLoaderFactory {
@@ -235,13 +345,15 @@ class DataLoaderFactory {
         return new LinearRegressionLoader(clientId);
       case 'mnist':
         return new MNISTLoader(clientId, options);
+      case 'cifar':
+        return new CIFARLoader(clientId, options);
       default:
         throw new Error(`Unknown dataset: ${datasetName}`);
     }
   }
 
   static getAvailable() {
-    return ['linear', 'mnist'];
+    return ['linear', 'mnist', 'cifar'];
   }
 }
 
@@ -249,5 +361,6 @@ module.exports = {
   DataLoader,
   LinearRegressionLoader,
   MNISTLoader,
+  CIFARLoader,
   DataLoaderFactory,
 };

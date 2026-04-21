@@ -11,6 +11,7 @@
  *   node src/utils/evaluateModel.js linear latest
  *   node src/utils/evaluateModel.js linear 3
  *   node src/utils/evaluateModel.js mnist latest 2000
+ *   node src/utils/evaluateModel.js cifar latest 2000
  */
 
 const fs = require('fs');
@@ -22,8 +23,9 @@ if (!process.env.TF_CPP_MIN_LOG_LEVEL) {
 }
 
 const tf = require('@tensorflow/tfjs-node');
-const { DataLoaderFactory, MNISTLoader } = require('../dataLoaders');
+const { DataLoaderFactory, MNISTLoader, CIFARLoader } = require('../dataLoaders');
 const MNISTFileLoader = require('../mnistFileLoader');
+const CIFARFileLoader = require('../cifarFileLoader');
 
 function parseArgs() {
   const datasetArg = process.argv[2] ? process.argv[2].toLowerCase() : null;
@@ -346,6 +348,103 @@ async function evaluateMnistDataset(modelWeights, maxSamples) {
   }
 }
 
+async function evaluateCifarDataset(modelWeights, maxSamples) {
+  if (!Array.isArray(modelWeights)) {
+    throw new Error('CIFAR modelData must be a flattened float array');
+  }
+
+  const loader = new CIFARLoader('EVAL');
+  const model = loader.buildModel();
+
+  try {
+    loader.deserializeGlobalModel(modelWeights, model);
+
+    const cifarLoader = new CIFARFileLoader();
+    const sampleLimit = maxSamples || 2000;
+    const { images, labels } = await cifarLoader.loadTestData(sampleLimit);
+
+    const imageData = [];
+    for (const img of images) {
+      imageData.push(...img);
+    }
+
+    const xs = tf.tensor4d(imageData, [images.length, 32, 32, 3]);
+    const ys = tf.tensor2d(labels);
+
+    const evalResult = model.evaluate(xs, ys, { batchSize: 64, verbose: 0 });
+
+    let loss;
+    let acc;
+    if (Array.isArray(evalResult)) {
+      loss = evalResult[0].dataSync()[0];
+      acc = evalResult[1] ? evalResult[1].dataSync()[0] : undefined;
+      evalResult.forEach((t) => t.dispose());
+    } else {
+      loss = evalResult.dataSync()[0];
+      evalResult.dispose();
+    }
+
+    const NUM_CLASSES = 10;
+    const predsTensor = model.predict(xs);
+    const predLabels = tf.argMax(predsTensor, 1).dataSync();
+    const trueLabels = tf.argMax(ys, 1).dataSync();
+    predsTensor.dispose();
+
+    const tp = new Array(NUM_CLASSES).fill(0);
+    const fp = new Array(NUM_CLASSES).fill(0);
+    const fn = new Array(NUM_CLASSES).fill(0);
+
+    for (let i = 0; i < trueLabels.length; i++) {
+      const pred = predLabels[i];
+      const truth = trueLabels[i];
+      if (pred === truth) {
+        tp[truth]++;
+      } else {
+        fp[pred]++;
+        fn[truth]++;
+      }
+    }
+
+    const perClass = [];
+    let macroP = 0;
+    let macroR = 0;
+    let macroF1 = 0;
+
+    for (let c = 0; c < NUM_CLASSES; c++) {
+      const precision = tp[c] + fp[c] > 0 ? tp[c] / (tp[c] + fp[c]) : 0;
+      const recall = tp[c] + fn[c] > 0 ? tp[c] / (tp[c] + fn[c]) : 0;
+      const f1 = precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : 0;
+      perClass.push({ class: c, precision, recall, f1, support: tp[c] + fn[c] });
+      macroP += precision;
+      macroR += recall;
+      macroF1 += f1;
+    }
+
+    const macroAvg = {
+      precision: macroP / NUM_CLASSES,
+      recall: macroR / NUM_CLASSES,
+      f1: macroF1 / NUM_CLASSES,
+    };
+
+    xs.dispose();
+    ys.dispose();
+
+    return {
+      task: 'classification',
+      overall: {
+        loss,
+        accuracy: acc,
+        sampleCount: images.length,
+        ...macroAvg,
+      },
+      macroAvg,
+      perClass,
+    };
+  } finally {
+    model.dispose();
+  }
+}
+
 function saveEvaluationResult(dataset, modelPath, modelRecord, result) {
   const reportsRoot = path.join(__dirname, '..', '..', 'reports', 'evaluations');
   const reportsDir = path.join(reportsRoot, dataset);
@@ -396,6 +495,18 @@ async function main() {
         result = await evaluateMnistDataset(modelWeights, maxSamples);
         console.log(
           `MNIST metrics -> loss=${result.overall.loss.toFixed(6)}, ` +
+          `accuracy=${(result.overall.accuracy * 100).toFixed(2)}%` +
+          (result.overall.f1 !== undefined
+            ? `, precision=${(result.overall.precision * 100).toFixed(2)}%` +
+              `, recall=${(result.overall.recall * 100).toFixed(2)}%` +
+              `, F1=${(result.overall.f1 * 100).toFixed(2)}%`
+            : '') +
+          `, samples=${result.overall.sampleCount}`
+        );
+      } else if (currentDataset === 'cifar') {
+        result = await evaluateCifarDataset(modelWeights, maxSamples);
+        console.log(
+          `CIFAR metrics -> loss=${result.overall.loss.toFixed(6)}, ` +
           `accuracy=${(result.overall.accuracy * 100).toFixed(2)}%` +
           (result.overall.f1 !== undefined
             ? `, precision=${(result.overall.precision * 100).toFixed(2)}%` +

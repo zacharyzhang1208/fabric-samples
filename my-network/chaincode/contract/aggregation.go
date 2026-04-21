@@ -41,6 +41,7 @@ type RoundStatus struct {
 	Round           int      `json:"round"`           // Current round number
 	ExpectedCount   int      `json:"expectedCount"`   // Expected number of participants
 	SubmittedOrgs   []string `json:"submittedOrgs"`   // Organizations that submitted
+	SubmittedNodes  []string `json:"submittedNodes"`  // Node-level submitters for centralized mode
 	AggregationDone bool     `json:"aggregationDone"` // Whether aggregation is completed
 	Timestamp       int64    `json:"timestamp"`       // Unix timestamp
 }
@@ -78,6 +79,77 @@ type AsyncAggregationResult struct {
 	Version         int   `json:"version"`
 	AggregatedCount int   `json:"aggregatedCount"`
 	Timestamp       int64 `json:"timestamp"`
+}
+
+type AggregationTiming struct {
+	Scope      string `json:"scope"`
+	Round      int    `json:"round"`
+	Version    int    `json:"version"`
+	DurationMs int64  `json:"durationMs"`
+	StartedAt  int64  `json:"startedAt"`
+	EndedAt    int64  `json:"endedAt"`
+}
+
+func syncAggregationTimingKey(round int) string {
+	return fmt.Sprintf("aggregation_timing_round_%d", round)
+}
+
+func asyncAggregationTimingKey(version int) string {
+	return fmt.Sprintf("aggregation_timing_version_%d", version)
+}
+
+func syncLastSubmitTsKey(round int) string {
+	return fmt.Sprintf("sync_last_submit_ts_round_%d", round)
+}
+
+func centralizedAggregationTimingKey(round int) string {
+	return fmt.Sprintf("centralized_aggregation_timing_round_%d", round)
+}
+
+func centralizedLastSubmitTsKey(round int) string {
+	return fmt.Sprintf("centralized_last_submit_ts_round_%d", round)
+}
+
+func storeNodeUpdate(
+	ctx contractapi.TransactionContextInterface,
+	collection string,
+	round int,
+	clientMSPID string,
+	nodeID string,
+	updateData string,
+	sampleCount int,
+) (*ModelUpdate, int64, error) {
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get timestamp: %v", err)
+	}
+
+	update := ModelUpdate{
+		OrgID:       clientMSPID,
+		Round:       round,
+		Version:     0,
+		UpdateData:  updateData,
+		SampleCount: sampleCount,
+		Timestamp:   txTimestamp.Seconds,
+	}
+
+	updateJSON, err := json.Marshal(update)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to marshal update: %v", err)
+	}
+
+	privateKey := fmt.Sprintf("node_update_round_%d_%s_%s", round, clientMSPID, nodeID)
+	if err := ctx.GetStub().PutPrivateData(collection, privateKey, updateJSON); err != nil {
+		return nil, 0, pdcWriteError(collection, err)
+	}
+
+	publicKey := fmt.Sprintf("node_update_public_round_%d_%s_%s", round, clientMSPID, nodeID)
+	if err := ctx.GetStub().PutState(publicKey, updateJSON); err != nil {
+		return nil, 0, fmt.Errorf("failed to store public node update record: %v", err)
+	}
+
+	lastSubmitMs := txTimestamp.Seconds*1000 + int64(txTimestamp.Nanos)/1_000_000
+	return &update, lastSubmitMs, nil
 }
 
 // ============================================================================
@@ -274,6 +346,44 @@ func (a *AggregationContract) InitSyncRound(ctx contractapi.TransactionContextIn
 	return ctx.GetStub().PutState(key, statusJSON)
 }
 
+// InitCentralizedRound initializes a centralized FL round that aggregates node updates directly.
+func (a *AggregationContract) InitCentralizedRound(ctx contractapi.TransactionContextInterface,
+	round int, expectedParticipants int) error {
+	existing, _ := a.GetRoundStatus(ctx, round)
+	if existing != nil {
+		if existing.ExpectedCount == expectedParticipants {
+			return nil
+		}
+		return fmt.Errorf(
+			"round %d already initialized with expectedParticipants=%d",
+			round,
+			existing.ExpectedCount,
+		)
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get timestamp: %v", err)
+	}
+
+	status := RoundStatus{
+		Round:           round,
+		ExpectedCount:   expectedParticipants,
+		SubmittedOrgs:   []string{},
+		SubmittedNodes:  []string{},
+		AggregationDone: false,
+		Timestamp:       txTimestamp.Seconds,
+	}
+
+	statusJSON, err := json.Marshal(status)
+	if err != nil {
+		return fmt.Errorf("failed to marshal round status: %v", err)
+	}
+
+	key := fmt.Sprintf("round_status_%d", round)
+	return ctx.GetStub().PutState(key, statusJSON)
+}
+
 // InitHierarchicalRound initializes a round for two-layer sync FL.
 // Layer-1: node updates -> org aggregation. Layer-2: org aggregation -> global aggregation.
 func (a *AggregationContract) InitHierarchicalRound(ctx contractapi.TransactionContextInterface,
@@ -292,6 +402,69 @@ func (a *AggregationContract) InitHierarchicalRound(ctx contractapi.TransactionC
 	}
 	if err := a.initOrgRoundStatus(ctx, round, "Org2MSP", org2ExpectedNodes); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+// SubmitLocalUpdateCentralized records one node's update for the centralized round flow.
+func (a *AggregationContract) SubmitLocalUpdateCentralized(ctx contractapi.TransactionContextInterface,
+	collection string, round int, nodeID string, updateData string, sampleCount int) error {
+	if strings.TrimSpace(nodeID) == "" {
+		return fmt.Errorf("nodeID must not be empty")
+	}
+
+	clientMSPID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get client MSP ID: %v", err)
+	}
+
+	validCollections := map[string]string{
+		"Org1MSP": CollectionVPSAOrg1Shards,
+		"Org2MSP": CollectionVPSAOrg2Shards,
+	}
+
+	expectedCollection, ok := validCollections[clientMSPID]
+	if !ok || collection != expectedCollection {
+		return fmt.Errorf("invalid collection for organization %s", clientMSPID)
+	}
+
+	status, err := a.GetRoundStatus(ctx, round)
+	if err != nil {
+		return fmt.Errorf("round %d not initialized: %v", round, err)
+	}
+
+	if status.AggregationDone {
+		return fmt.Errorf("round %d already completed", round)
+	}
+
+	participantKey := fmt.Sprintf("%s:%s", clientMSPID, nodeID)
+	if containsString(status.SubmittedNodes, participantKey) {
+		return nil
+	}
+
+	_, lastSubmitMs, err := storeNodeUpdate(ctx, collection, round, clientMSPID, nodeID, updateData, sampleCount)
+	if err != nil {
+		return err
+	}
+
+	status.SubmittedNodes = append(status.SubmittedNodes, participantKey)
+	if !containsString(status.SubmittedOrgs, clientMSPID) {
+		status.SubmittedOrgs = append(status.SubmittedOrgs, clientMSPID)
+	}
+
+	statusJSON, err := json.Marshal(status)
+	if err != nil {
+		return fmt.Errorf("failed to marshal status: %v", err)
+	}
+
+	statusKey := fmt.Sprintf("round_status_%d", round)
+	if err := ctx.GetStub().PutState(statusKey, statusJSON); err != nil {
+		return err
+	}
+
+	if err := ctx.GetStub().PutState(centralizedLastSubmitTsKey(round), []byte(fmt.Sprintf("%d", lastSubmitMs))); err != nil {
+		return fmt.Errorf("failed to store centralized last submit timestamp: %v", err)
 	}
 
 	return nil
@@ -419,6 +592,11 @@ func (a *AggregationContract) SubmitLocalNodeUpdateSync(ctx contractapi.Transact
 	publicKey := fmt.Sprintf("node_update_public_round_%d_%s_%s", round, clientMSPID, nodeID)
 	if err := ctx.GetStub().PutState(publicKey, updateJSON); err != nil {
 		return fmt.Errorf("failed to store public node update record: %v", err)
+	}
+
+	lastSubmitMs := txTimestamp.Seconds*1000 + int64(txTimestamp.Nanos)/1_000_000
+	if err := ctx.GetStub().PutState(syncLastSubmitTsKey(round), []byte(fmt.Sprintf("%d", lastSubmitMs))); err != nil {
+		return fmt.Errorf("failed to store sync last submit timestamp: %v", err)
 	}
 
 	orgStatus.SubmittedNodeIDs = append(orgStatus.SubmittedNodeIDs, nodeID)
@@ -742,6 +920,119 @@ func (a *AggregationContract) FinalizeSyncRound(ctx contractapi.TransactionConte
 		}
 	}
 
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get finalize timestamp: %v", err)
+	}
+	endedAtMs := txTimestamp.Seconds*1000 + int64(txTimestamp.Nanos)/1_000_000
+	startedAtMs := endedAtMs
+	if lastSubmitRaw, err := ctx.GetStub().GetState(syncLastSubmitTsKey(round)); err == nil && lastSubmitRaw != nil {
+		var parsed int64
+		if _, scanErr := fmt.Sscanf(string(lastSubmitRaw), "%d", &parsed); scanErr == nil {
+			startedAtMs = parsed
+		}
+	}
+	durationMs := int64(0)
+	if endedAtMs >= startedAtMs {
+		durationMs = endedAtMs - startedAtMs
+	}
+
+	timing := AggregationTiming{
+		Scope:      "sync",
+		Round:      round,
+		DurationMs: durationMs,
+		StartedAt:  startedAtMs,
+		EndedAt:    endedAtMs,
+	}
+	timingJSON, err := json.Marshal(timing)
+	if err != nil {
+		return fmt.Errorf("failed to marshal sync aggregation timing: %v", err)
+	}
+	if err := ctx.GetStub().PutState(syncAggregationTimingKey(round), timingJSON); err != nil {
+		return fmt.Errorf("failed to store sync aggregation timing: %v", err)
+	}
+
+	return nil
+}
+
+// FinalizeCentralizedRound performs aggregation directly over all node-level submissions.
+func (a *AggregationContract) FinalizeCentralizedRound(ctx contractapi.TransactionContextInterface, round int) error {
+	status, err := a.GetRoundStatus(ctx, round)
+	if err != nil {
+		return fmt.Errorf("round %d not initialized: %v", round, err)
+	}
+
+	if status.AggregationDone {
+		return nil
+	}
+
+	if len(status.SubmittedNodes) < status.ExpectedCount {
+		return fmt.Errorf(
+			"round %d not ready: %d/%d submitted",
+			round,
+			len(status.SubmittedNodes),
+			status.ExpectedCount,
+		)
+	}
+
+	if err := a.aggregateCentralized(ctx, round, status.SubmittedNodes); err != nil {
+		return fmt.Errorf("failed to aggregate round %d: %v", round, err)
+	}
+
+	status.AggregationDone = true
+	statusJSON, err := json.Marshal(status)
+	if err != nil {
+		return fmt.Errorf("failed to marshal status: %v", err)
+	}
+
+	statusKey := fmt.Sprintf("round_status_%d", round)
+	if err := ctx.GetStub().PutState(statusKey, statusJSON); err != nil {
+		return err
+	}
+
+	currentRound, err := a.GetCurrentRound(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get current round: %v", err)
+	}
+
+	if round == currentRound+1 {
+		if err := a.IncrementRound(ctx); err != nil {
+			return fmt.Errorf("failed to increment round: %v", err)
+		}
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get finalize timestamp: %v", err)
+	}
+	endedAtMs := txTimestamp.Seconds*1000 + int64(txTimestamp.Nanos)/1_000_000
+	startedAtMs := endedAtMs
+	if lastSubmitRaw, err := ctx.GetStub().GetState(centralizedLastSubmitTsKey(round)); err == nil && lastSubmitRaw != nil {
+		var parsed int64
+		if _, scanErr := fmt.Sscanf(string(lastSubmitRaw), "%d", &parsed); scanErr == nil {
+			startedAtMs = parsed
+		}
+	}
+	durationMs := int64(0)
+	if endedAtMs >= startedAtMs {
+		durationMs = endedAtMs - startedAtMs
+	}
+
+	timing := AggregationTiming{
+		Scope:      "centralized",
+		Round:      round,
+		DurationMs: durationMs,
+		StartedAt:  startedAtMs,
+		EndedAt:    endedAtMs,
+	}
+	timingJSON, err := json.Marshal(timing)
+	if err != nil {
+		return fmt.Errorf("failed to marshal centralized aggregation timing: %v", err)
+	}
+	if err := ctx.GetStub().PutState(centralizedAggregationTimingKey(round), timingJSON); err != nil {
+		return fmt.Errorf("failed to store centralized aggregation timing: %v", err)
+	}
+
 	return nil
 }
 
@@ -848,6 +1139,131 @@ func (a *AggregationContract) aggregateSync(ctx contractapi.TransactionContextIn
 
 	key := fmt.Sprintf("global_model_round_%d", round)
 	return ctx.GetStub().PutState(key, modelJSON)
+}
+
+func (a *AggregationContract) aggregateCentralized(ctx contractapi.TransactionContextInterface,
+	round int, participants []string) error {
+	if len(participants) == 0 {
+		return fmt.Errorf("no participants for round %d", round)
+	}
+
+	var weightedSum []float64
+	totalSamples := 0
+
+	for _, participant := range participants {
+		orgID, nodeID, ok := strings.Cut(participant, ":")
+		if !ok || strings.TrimSpace(orgID) == "" || strings.TrimSpace(nodeID) == "" {
+			return fmt.Errorf("invalid participant key %q", participant)
+		}
+
+		publicKey := fmt.Sprintf("node_update_public_round_%d_%s_%s", round, orgID, nodeID)
+		updateJSON, err := ctx.GetStub().GetState(publicKey)
+		if err != nil {
+			return fmt.Errorf("failed to read update for %s: %v", participant, err)
+		}
+		if updateJSON == nil {
+			return fmt.Errorf("missing update for round %d, participant %s", round, participant)
+		}
+
+		var update ModelUpdate
+		if err := json.Unmarshal(updateJSON, &update); err != nil {
+			return fmt.Errorf("failed to parse update for %s: %v", participant, err)
+		}
+		if update.SampleCount <= 0 {
+			return fmt.Errorf("invalid sample count from %s: %d", participant, update.SampleCount)
+		}
+
+		weights, err := parseWeights(update.UpdateData)
+		if err != nil {
+			return fmt.Errorf("invalid updateData from %s: %v", participant, err)
+		}
+
+		if weightedSum == nil {
+			weightedSum = make([]float64, len(weights))
+		}
+		if len(weights) != len(weightedSum) {
+			return fmt.Errorf("weight dimension mismatch for %s", participant)
+		}
+
+		for i := range weights {
+			weightedSum[i] += weights[i] * float64(update.SampleCount)
+		}
+		totalSamples += update.SampleCount
+	}
+
+	if totalSamples <= 0 {
+		return fmt.Errorf("totalSamples must be > 0")
+	}
+
+	avgWeights := make([]float64, len(weightedSum))
+	for i := range weightedSum {
+		avgWeights[i] = weightedSum[i] / float64(totalSamples)
+	}
+
+	modelData, err := json.Marshal(avgWeights)
+	if err != nil {
+		return fmt.Errorf("failed to marshal aggregated weights: %v", err)
+	}
+
+	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
+	if err != nil {
+		return fmt.Errorf("failed to get timestamp: %v", err)
+	}
+
+	globalModel := GlobalModel{
+		Round:        round,
+		Version:      0,
+		ModelData:    string(modelData),
+		TotalSamples: totalSamples,
+		Participants: participants,
+		Timestamp:    txTimestamp.Seconds,
+	}
+
+	modelJSON, err := json.Marshal(globalModel)
+	if err != nil {
+		return fmt.Errorf("failed to marshal aggregated global model: %v", err)
+	}
+
+	key := fmt.Sprintf("global_model_round_%d", round)
+	return ctx.GetStub().PutState(key, modelJSON)
+}
+
+// GetSyncAggregationTiming retrieves the pure internal sync aggregation duration.
+func (a *AggregationContract) GetSyncAggregationTiming(ctx contractapi.TransactionContextInterface, round int) (*AggregationTiming, error) {
+	key := syncAggregationTimingKey(round)
+	timingJSON, err := ctx.GetStub().GetState(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read sync aggregation timing: %v", err)
+	}
+	if timingJSON == nil {
+		return nil, fmt.Errorf("sync aggregation timing for round %d not found", round)
+	}
+
+	var timing AggregationTiming
+	if err := json.Unmarshal(timingJSON, &timing); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal sync aggregation timing: %v", err)
+	}
+
+	return &timing, nil
+}
+
+// GetCentralizedAggregationTiming retrieves the pure internal centralized aggregation duration.
+func (a *AggregationContract) GetCentralizedAggregationTiming(ctx contractapi.TransactionContextInterface, round int) (*AggregationTiming, error) {
+	key := centralizedAggregationTimingKey(round)
+	timingJSON, err := ctx.GetStub().GetState(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read centralized aggregation timing: %v", err)
+	}
+	if timingJSON == nil {
+		return nil, fmt.Errorf("centralized aggregation timing for round %d not found", round)
+	}
+
+	var timing AggregationTiming
+	if err := json.Unmarshal(timingJSON, &timing); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal centralized aggregation timing: %v", err)
+	}
+
+	return &timing, nil
 }
 
 // ============================================================================
@@ -1099,6 +1515,7 @@ func (a *AggregationContract) AggregateAsyncBatch(
 	totalSamples := prevSamples
 	participants := []string{}
 	aggregatedTxIDs := make([]string, 0, len(txIDs))
+	latestSelectedUpdateMs := int64(0)
 
 	for _, txID := range txIDs {
 		if txID == "" {
@@ -1166,6 +1583,10 @@ func (a *AggregationContract) AggregateAsyncBatch(
 			participants = append(participants, updateMeta.OrgID)
 		}
 		aggregatedTxIDs = append(aggregatedTxIDs, txID)
+		updateMs := updateMeta.Timestamp * 1000
+		if updateMs > latestSelectedUpdateMs {
+			latestSelectedUpdateMs = updateMs
+		}
 	}
 
 	if len(aggregatedTxIDs) < requiredUpdates {
@@ -1245,7 +1666,48 @@ func (a *AggregationContract) AggregateAsyncBatch(
 		return "", fmt.Errorf("failed to emit async aggregation event: %v", err)
 	}
 
+	endedAtMs := txTimestamp.Seconds*1000 + int64(txTimestamp.Nanos)/1_000_000
+	startedAtMs := latestSelectedUpdateMs
+	if startedAtMs <= 0 || startedAtMs > endedAtMs {
+		startedAtMs = endedAtMs
+	}
+	durationMs := endedAtMs - startedAtMs
+
+	timing := AggregationTiming{
+		Scope:      "async",
+		Version:    nextVersion,
+		DurationMs: durationMs,
+		StartedAt:  startedAtMs,
+		EndedAt:    endedAtMs,
+	}
+	timingJSON, err := json.Marshal(timing)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal async aggregation timing: %v", err)
+	}
+	if err := ctx.GetStub().PutState(asyncAggregationTimingKey(nextVersion), timingJSON); err != nil {
+		return "", fmt.Errorf("failed to store async aggregation timing: %v", err)
+	}
+
 	return string(resultJSON), nil
+}
+
+// GetAsyncAggregationTiming retrieves the pure internal async aggregation duration.
+func (a *AggregationContract) GetAsyncAggregationTiming(ctx contractapi.TransactionContextInterface, version int) (*AggregationTiming, error) {
+	key := asyncAggregationTimingKey(version)
+	timingJSON, err := ctx.GetStub().GetState(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read async aggregation timing: %v", err)
+	}
+	if timingJSON == nil {
+		return nil, fmt.Errorf("async aggregation timing for version %d not found", version)
+	}
+
+	var timing AggregationTiming
+	if err := json.Unmarshal(timingJSON, &timing); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal async aggregation timing: %v", err)
+	}
+
+	return &timing, nil
 }
 
 // GetLatestModelVersion returns the latest model version in async mode

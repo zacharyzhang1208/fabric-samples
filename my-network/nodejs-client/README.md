@@ -1,12 +1,13 @@
-# Node.js Fabric Client - Decentralized FL Architecture
+# Node.js Fabric Client - Multi-Mode FL Architecture
 
-轻量级 Hyperledger Fabric 客户端 + 去中心化联邦学习模拟。
+轻量级 Hyperledger Fabric 客户端 + 联邦学习模拟，支持同步、中心化同步和异步三种模式。
 
 **架构特点**：
 - ✅ **无中央协调器**：5 个独立 FL 客户端进程
 - ✅ **模拟真实部署**：每个客户端 = 一个组织的一个节点
 - ✅ **Hyperledger 集成**：客户端可独立提交/查询链上聚合结果
 - ✅ **容错设计**：单个节点故障不影响其他节点
+- ✅ **中心化模式**：可切换为单协调者聚合，减少同步争抢
 
 ## 🚀 快速开始
 

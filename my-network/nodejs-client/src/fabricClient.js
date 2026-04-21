@@ -164,6 +164,10 @@ class FabricClient {
     return this.submit('AggregationContract:InitSyncRound', round, expectedParticipants);
   }
 
+  async initCentralizedRound(round, expectedParticipants = 2) {
+    return this.submit('AggregationContract:InitCentralizedRound', round, expectedParticipants);
+  }
+
   async submitLocalUpdateSync(collection, round, updateData, sampleCount) {
     return this.submit(
       'AggregationContract:SubmitLocalUpdateSync',
@@ -174,8 +178,23 @@ class FabricClient {
     );
   }
 
+  async submitLocalUpdateCentralized(collection, round, nodeID, updateData, sampleCount) {
+    return this.submit(
+      'AggregationContract:SubmitLocalUpdateCentralized',
+      collection,
+      round,
+      nodeID,
+      updateData,
+      sampleCount
+    );
+  }
+
   async finalizeSyncRound(round) {
     return this.submit('AggregationContract:FinalizeSyncRound', round);
+  }
+
+  async finalizeCentralizedRound(round) {
+    return this.submit('AggregationContract:FinalizeCentralizedRound', round);
   }
 
   async submitLocalUpdateAsync(collection, updateData, sampleCount, baselineVersion = 0) {
@@ -220,6 +239,21 @@ class FabricClient {
 
   async getRoundStatus(round) {
     const result = await this.evaluate('AggregationContract:GetRoundStatus', round);
+    return JSON.parse(result.toString());
+  }
+
+  async getSyncAggregationTiming(round) {
+    const result = await this.evaluate('AggregationContract:GetSyncAggregationTiming', round);
+    return JSON.parse(result.toString());
+  }
+
+  async getCentralizedAggregationTiming(round) {
+    const result = await this.evaluate('AggregationContract:GetCentralizedAggregationTiming', round);
+    return JSON.parse(result.toString());
+  }
+
+  async getAsyncAggregationTiming(version) {
+    const result = await this.evaluate('AggregationContract:GetAsyncAggregationTiming', version);
     return JSON.parse(result.toString());
   }
 
