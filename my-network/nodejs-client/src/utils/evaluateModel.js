@@ -26,6 +26,7 @@ const tf = require('@tensorflow/tfjs-node');
 const { DataLoaderFactory, MNISTLoader, CIFARLoader } = require('../dataLoaders');
 const MNISTFileLoader = require('../mnistFileLoader');
 const CIFARFileLoader = require('../cifarFileLoader');
+const { createEvaluationRunId } = require('./timing');
 
 function parseArgs() {
   const datasetArg = process.argv[2] ? process.argv[2].toLowerCase() : null;
@@ -141,6 +142,26 @@ function resolveModelFiles(dataset, roundArg) {
     throw new Error(`Model file not found for round/version ${roundOrVersion} under: ${modelsDir}`);
   }
   return [match.filePath];
+}
+
+function normalizeTopology(mode) {
+  return mode === 'centralized' ? 'centralized' : 'decentralized';
+}
+
+function normalizeMode(mode) {
+  return mode === 'async' ? 'async' : 'sync';
+}
+
+function getRoundLabel(modelRecord) {
+  if (Number.isInteger(modelRecord.round) && modelRecord.round > 0) {
+    return `round-${modelRecord.round}`;
+  }
+
+  if (Number.isInteger(modelRecord.version) && modelRecord.version > 0) {
+    return `version-${modelRecord.version}`;
+  }
+
+  return 'latest';
 }
 
 function loadModelRecord(modelPath) {
@@ -446,19 +467,32 @@ async function evaluateCifarDataset(modelWeights, maxSamples) {
 }
 
 function saveEvaluationResult(dataset, modelPath, modelRecord, result) {
-  const reportsRoot = path.join(__dirname, '..', '..', 'reports', 'evaluations');
-  const reportsDir = path.join(reportsRoot, dataset);
+  const topology = normalizeTopology(modelRecord.mode);
+  const mode = normalizeMode(modelRecord.mode);
+  const roundLabel = getRoundLabel(modelRecord);
+  const runId = process.env.FL_TIMING_RUN_ID || createEvaluationRunId({
+    dataset,
+    topology,
+    mode,
+    roundLabel,
+  });
+  const reportsDir = path.join(__dirname, '..', '..', 'reports', 'evaluations', runId);
   if (!fs.existsSync(reportsDir)) {
     fs.mkdirSync(reportsDir, { recursive: true });
   }
 
-  const roundPart = modelRecord.round ? `round-${modelRecord.round}` : 'latest';
-  const outputPath = path.join(reportsDir, `evaluation-${roundPart}.json`);
+  const outputPath = path.join(reportsDir, `evaluation-${roundLabel}.json`);
 
   const payload = {
+    runId,
     dataset,
+    topology,
+    mode,
+    roundLabel,
     modelFile: modelPath,
     round: modelRecord.round,
+    version: modelRecord.version,
+    modelMode: modelRecord.mode,
     timestamp: new Date().toISOString(),
     result,
   };

@@ -33,6 +33,7 @@ const EVALS_DIR  = path.join(__dirname, '..', '..', 'reports', 'evaluations');
 const REPORTS_DIR = path.join(__dirname, '..', '..', 'reports');
 const OUTPUT_FILE = path.join(REPORTS_DIR, `fl-training-report-${DATASET}.html`);
 const MODELS_DIR = path.join(__dirname, '..', '..', 'models', DATASET);
+const RUN_ID = process.env.FL_TIMING_RUN_ID || null;
 
 // ── Data loading ──────────────────────────────────────────────────────────────
 
@@ -95,34 +96,24 @@ function extractParticipation(models) {
 
 /**
  * Load evaluation result files produced by evaluateModel.js.
- * Preferred pattern: reports/evaluations/<dataset>/evaluation-round-<n>.json
- * Legacy pattern:    reports/evaluations/evaluation-<dataset>-round-<n>.json
+ * Preferred pattern: reports/evaluations/<runId>/evaluation-round-<n>.json
  */
 function loadEvaluations() {
   if (!fs.existsSync(EVALS_DIR)) return [];
-  const datasetEvalDir = path.join(EVALS_DIR, DATASET);
-  const patternNew = /^evaluation-round-(\d+)\.json$/;
-  const patternLegacy = new RegExp(`^evaluation-${DATASET}-round-(\\d+)\\.json$`);
+  const runEvalDir = RUN_ID ? path.join(EVALS_DIR, RUN_ID) : null;
+  const patternNew = /^evaluation-(round|version)-(\d+)\.json$/;
   const evals = [];
 
-  if (fs.existsSync(datasetEvalDir)) {
-    for (const file of fs.readdirSync(datasetEvalDir)) {
+  if (runEvalDir && fs.existsSync(runEvalDir)) {
+    for (const file of fs.readdirSync(runEvalDir)) {
       if (!patternNew.test(file)) continue;
       try {
-        evals.push(JSON.parse(fs.readFileSync(path.join(datasetEvalDir, file), 'utf8')));
+        evals.push(JSON.parse(fs.readFileSync(path.join(runEvalDir, file), 'utf8')));
       } catch (_) { /* skip malformed files */ }
     }
   }
 
-  // Backward compatibility for existing flat evaluation files.
-  for (const file of fs.readdirSync(EVALS_DIR)) {
-    if (!patternLegacy.test(file)) continue;
-    try {
-      evals.push(JSON.parse(fs.readFileSync(path.join(EVALS_DIR, file), 'utf8')));
-    } catch (_) { /* skip malformed files */ }
-  }
-
-  evals.sort((a, b) => a.round - b.round);
+  evals.sort((a, b) => (a.round || a.version || 0) - (b.round || b.version || 0));
   return evals;
 }
 

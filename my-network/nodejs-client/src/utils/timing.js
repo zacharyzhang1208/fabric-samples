@@ -25,6 +25,11 @@ function createRunId({ dataset, mode, epochs }) {
   return `${stamp}-${dataset}-${mode}-${epochs}r`;
 }
 
+function createEvaluationRunId({ dataset, topology, mode, roundLabel }) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `${stamp}-${dataset}-${topology}-${mode}-${roundLabel}`;
+}
+
 function summarizeDurations(values) {
   const finiteValues = values.filter((value) => Number.isFinite(value));
   if (finiteValues.length === 0) {
@@ -53,5 +58,6 @@ module.exports = {
   writeJson,
   readJsonIfExists,
   createRunId,
+  createEvaluationRunId,
   summarizeDurations,
 };
