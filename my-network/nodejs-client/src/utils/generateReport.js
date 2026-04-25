@@ -38,8 +38,19 @@ const RUN_ID = process.env.FL_TIMING_RUN_ID || null;
 // ── Data loading ──────────────────────────────────────────────────────────────
 
 function loadGlobalModels() {
-  const dirs = [MODELS_DIR, path.join(MODELS_DIR, 'sync'), path.join(MODELS_DIR, 'async')]
-    .filter((d) => fs.existsSync(d));
+  const dirs = [];
+  const walkDirs = (dir) => {
+    if (!fs.existsSync(dir)) {
+      return;
+    }
+    dirs.push(dir);
+    for (const name of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (name.isDirectory()) {
+        walkDirs(path.join(dir, name.name));
+      }
+    }
+  };
+  walkDirs(MODELS_DIR);
   const pattern = /^global-model-(round|version)-(\d+)\.json$/;
 
   const models = [];

@@ -17,335 +17,8 @@ if (!process.env.TF_CPP_MIN_LOG_LEVEL) {
 const tf = require('@tensorflow/tfjs-node');
 const path = require('path');
 const fs = require('fs');
-const { Gateway } = require('fabric-network');
+const FabricClient = require('./fabricClient');
 const { writeJson } = require('./utils/timing');
-
-function buildClientFabricClient(options) {
-  /**
-   * Returns a dynamically configured FabricClient
-   * options: { orgDomain, orgMspId, peerName, peerEndpoint, ordererEndpoint, projectRoot }
-   */
-  const config = options;
-
-  function readUtf8(filePath) {
-    return fs.readFileSync(filePath, 'utf8');
-  }
-
-  function readFirstFile(dirPath) {
-    if (!fs.existsSync(dirPath)) {
-      throw new Error(
-        `Missing crypto directory: ${dirPath}. Run './deploy.sh --strategy vpsa' first (or regenerate organizations).`
-      );
-    }
-    const files = fs.readdirSync(dirPath);
-    if (!files.length) {
-      throw new Error(`No files found in directory: ${dirPath}`);
-    }
-    return path.join(dirPath, files[0]);
-  }
-
-  function buildIdentity() {
-    const base = path.join(
-      config.projectRoot,
-      'organizations',
-      'peerOrganizations',
-      config.orgDomain,
-      'users',
-      `Admin@${config.orgDomain}`,
-      'msp'
-    );
-
-    const certPath = path.join(base, 'signcerts', `Admin@${config.orgDomain}-cert.pem`);
-    const keyDir = path.join(base, 'keystore');
-    const keyPath = readFirstFile(keyDir);
-
-    if (!fs.existsSync(certPath)) {
-      throw new Error(
-        `Missing admin cert: ${certPath}. Run './deploy.sh --strategy vpsa' first (or regenerate organizations).`
-      );
-    }
-
-    return {
-      credentials: {
-        certificate: readUtf8(certPath),
-        privateKey: readUtf8(keyPath),
-      },
-      mspId: config.orgMspId,
-      type: 'X.509',
-    };
-  }
-
-  function buildConnectionProfile() {
-    const peerTlsPath = path.join(
-      config.projectRoot,
-      'organizations',
-      'peerOrganizations',
-      config.orgDomain,
-      'peers',
-      config.peerName,
-      'tls',
-      'ca.crt'
-    );
-
-    const ordererTlsPath = path.join(
-      config.projectRoot,
-      'organizations',
-      'ordererOrganizations',
-      'example.com',
-      'orderers',
-      'orderer.example.com',
-      'tls',
-      'ca.crt'
-    );
-
-    return {
-      name: 'fl-network-client',
-      version: '1.0.0',
-      channels: {
-        trainingchannel: {
-          peers: {
-            [config.peerName]: {},
-          },
-          orderers: ['orderer.example.com'],
-        },
-      },
-      organizations: {
-        [config.orgMspId]: {
-          mspid: config.orgMspId,
-          peers: [config.peerName],
-        },
-      },
-      peers: {
-        [config.peerName]: {
-          url: `grpcs://${config.peerEndpoint}`,
-          tlsCACerts: {
-            pem: readUtf8(peerTlsPath),
-          },
-          grpcOptions: {
-            'ssl-target-name-override': config.peerName,
-            hostnameOverride: config.peerName,
-          },
-        },
-      },
-      orderers: {
-        'orderer.example.com': {
-          url: `grpcs://${config.ordererEndpoint}`,
-          tlsCACerts: {
-            pem: readUtf8(ordererTlsPath),
-          },
-          grpcOptions: {
-            'ssl-target-name-override': 'orderer.example.com',
-            hostnameOverride: 'orderer.example.com',
-          },
-        },
-      },
-    };
-  }
-
-  class FabricClient {
-    constructor() {
-      this.gateway = new Gateway();
-      this.network = null;
-      this.contract = null;
-    }
-
-    async connect() {
-      const identity = buildIdentity();
-      const connectionProfile = buildConnectionProfile();
-
-      await this.gateway.connect(connectionProfile, {
-        identity,
-        discovery: { enabled: true, asLocalhost: true },
-      });
-
-      this.network = await this.gateway.getNetwork('trainingchannel');
-      this.contract = this.network.getContract('contracts');
-    }
-
-    async set(key, value) {
-      if (!this.contract) {
-        throw new Error('Client is not connected');
-      }
-      await this.contract.submitTransaction('Set', key, value);
-      return { key, value };
-    }
-
-    async get(key) {
-      if (!this.contract) {
-        throw new Error('Client is not connected');
-      }
-      const result = await this.contract.evaluateTransaction('Get', key);
-      return result.toString();
-    }
-
-    async tryGet(key) {
-      if (!this.contract) {
-        throw new Error('Client is not connected');
-      }
-      try {
-        const result = await this.contract.evaluateTransaction('Get', key);
-        return result.toString();
-      } catch (err) {
-        if (err.message && err.message.includes('does not exist')) {
-          return null;
-        }
-        throw err;
-      }
-    }
-
-    async disconnect() {
-      await this.gateway.disconnect();
-    }
-
-    async submit(functionName, ...args) {
-      if (!this.contract) {
-        throw new Error('Client is not connected');
-      }
-      return this.contract.submitTransaction(functionName, ...args.map(String));
-    }
-
-    async evaluate(functionName, ...args) {
-      if (!this.contract) {
-        throw new Error('Client is not connected');
-      }
-      return this.contract.evaluateTransaction(functionName, ...args.map(String));
-    }
-
-    async initSyncRound(round, expectedParticipants = 2) {
-      return this.submit('AggregationContract:InitSyncRound', round, expectedParticipants);
-    }
-
-    async initCentralizedRound(round, expectedParticipants = 2) {
-      return this.submit('AggregationContract:InitCentralizedRound', round, expectedParticipants);
-    }
-
-    async initHierarchicalRound(round, expectedOrgs, org1ExpectedNodes, org2ExpectedNodes) {
-      return this.submit(
-        'AggregationContract:InitHierarchicalRound',
-        round,
-        expectedOrgs,
-        org1ExpectedNodes,
-        org2ExpectedNodes
-      );
-    }
-
-    async submitLocalNodeUpdateSync(collection, round, nodeID, weightsJson, sampleCount) {
-      return this.submit(
-        'AggregationContract:SubmitLocalNodeUpdateSync',
-        collection,
-        round,
-        nodeID,
-        weightsJson,
-        sampleCount
-      );
-    }
-
-    async finalizeOrgSyncRound(round) {
-      return this.submit('AggregationContract:FinalizeOrgSyncRound', round);
-    }
-
-    async submitLocalUpdateSync(collection, round, weightsJson, sampleCount) {
-      return this.submit(
-        'AggregationContract:SubmitLocalUpdateSync',
-        collection,
-        round,
-        weightsJson,
-        sampleCount
-      );
-    }
-
-    async submitLocalUpdateCentralized(collection, round, nodeID, weightsJson, sampleCount) {
-      return this.submit(
-        'AggregationContract:SubmitLocalUpdateCentralized',
-        collection,
-        round,
-        nodeID,
-        weightsJson,
-        sampleCount
-      );
-    }
-
-    async finalizeSyncRound(round) {
-      return this.submit('AggregationContract:FinalizeSyncRound', round);
-    }
-
-    async finalizeCentralizedRound(round) {
-      return this.submit('AggregationContract:FinalizeCentralizedRound', round);
-    }
-
-    async getRoundStatus(round) {
-      const result = await this.evaluate('AggregationContract:GetRoundStatus', round);
-      return JSON.parse(result.toString());
-    }
-
-    async getSyncAggregationTiming(round) {
-      const result = await this.evaluate('AggregationContract:GetSyncAggregationTiming', round);
-      return JSON.parse(result.toString());
-    }
-
-    async getCentralizedAggregationTiming(round) {
-      const result = await this.evaluate('AggregationContract:GetCentralizedAggregationTiming', round);
-      return JSON.parse(result.toString());
-    }
-
-    async getAsyncAggregationTiming(version) {
-      const result = await this.evaluate('AggregationContract:GetAsyncAggregationTiming', version);
-      return JSON.parse(result.toString());
-    }
-
-    async getOrgRoundStatus(round, orgID) {
-      const result = await this.evaluate('AggregationContract:GetOrgRoundStatus', round, orgID);
-      return JSON.parse(result.toString());
-    }
-
-    async submitLocalUpdateAsync(collection, weightsJson, sampleCount, baselineVersion = 0) {
-      const result = await this.submit(
-        'AggregationContract:SubmitLocalUpdateAsync',
-        collection,
-        weightsJson,
-        sampleCount,
-        baselineVersion
-      );
-      return JSON.parse(result.toString());
-    }
-
-    async getGlobalModel(round) {
-      const result = await this.evaluate('AggregationContract:GetGlobalModel', round);
-      return JSON.parse(result.toString());
-    }
-
-    async getLatestModelVersion() {
-      const result = await this.evaluate('AggregationContract:GetLatestModelVersion');
-      return Number(result.toString());
-    }
-
-    async getGlobalModelByVersion(version) {
-      const result = await this.evaluate('AggregationContract:GetGlobalModelByVersion', version);
-      return JSON.parse(result.toString());
-    }
-
-    async aggregateAsyncBatch(txIds, minUpdates = 5) {
-      const result = await this.submit(
-        'AggregationContract:AggregateAsyncBatch',
-        JSON.stringify(txIds),
-        minUpdates
-      );
-      return JSON.parse(result.toString());
-    }
-
-    async getPendingAsyncUpdates(limit = 0) {
-      const result = await this.evaluate('AggregationContract:GetPendingAsyncUpdates', limit);
-      return JSON.parse(result.toString());
-    }
-
-    async getCurrentRound() {
-      const result = await this.evaluate('AggregationContract:GetCurrentRound');
-      return Number(result.toString());
-    }
-  }
-
-  return FabricClient;
-}
 
 class FlClient {
   constructor(options) {
@@ -365,20 +38,54 @@ class FlClient {
     this.org2NodeCount = options.org2NodeCount || 3;
     this.dataset = options.dataset || 'linear';
     this.mnistSamples = options.mnistSamples || 20000;
+    this.resume = Boolean(options.resume);
+
+    const legacyMode = options.mode ? String(options.mode).toLowerCase() : null;
+    this.topology = String(options.topology || 'decentralized').toLowerCase();
+    this.syncMode = String(options.syncMode || 'sync').toLowerCase();
+
+    if (legacyMode) {
+      if (legacyMode === 'centralized') {
+        this.topology = 'centralized';
+        this.syncMode = 'sync';
+      } else if (legacyMode === 'decentralized' || legacyMode === 'sync') {
+        this.topology = 'decentralized';
+        this.syncMode = 'sync';
+      } else if (legacyMode === 'async') {
+        this.topology = 'decentralized';
+        this.syncMode = 'async';
+      }
+    }
+
+    const validTopologies = new Set(['centralized', 'decentralized']);
+    if (!validTopologies.has(this.topology)) {
+      throw new Error(`Unsupported topology: ${this.topology}. Use centralized or decentralized.`);
+    }
+    const validSyncModes = new Set(['sync', 'async']);
+    if (!validSyncModes.has(this.syncMode)) {
+      throw new Error(`Unsupported syncMode: ${this.syncMode}. Use sync or async.`);
+    }
+
+    this.mode = this.syncMode === 'async'
+      ? 'async'
+      : (this.topology === 'centralized' ? 'centralized' : 'decentralized');
     
-    this.FabricClient = buildClientFabricClient({
+    this.fabricClientOptions = {
       orgDomain: this.orgDomain,
       orgMspId: this.orgMspId,
       peerName: this.peerName,
       peerEndpoint: this.peerEndpoint,
       ordererEndpoint: this.ordererEndpoint,
       projectRoot: this.projectRoot,
-    });
+      peerHostAlias: this.peerName,
+      ordererHostAlias: 'orderer.example.com',
+      channelName: 'trainingchannel',
+      chaincodeName: 'contracts',
+    };
     
     this.fabricClient = null;
     this.model = null;
     this.localData = null;
-    this.mode = String(options.mode || 'sync').toLowerCase();
     this.dataLoader = null;
     
     // Async mode specific fields
@@ -388,12 +95,12 @@ class FlClient {
     this.asyncBatchSize = 5;
     this.asyncPendingTimeoutMs = 15000;
     this.asyncCommitteeTakeoverMs = 2500;
+    this.centralizedCoordinatorId = process.env.CENTRALIZED_COORDINATOR || 'A-N1';
+    this.isCentralizedCoordinator = this.topology === 'centralized' && this.clientId === this.centralizedCoordinatorId;
     this.asyncCommitteeMembers = this.buildAsyncCommitteeMembers();
     this.asyncCommitteeRank = this.asyncCommitteeMembers.indexOf(this.clientId);
-    this.isAsyncCommitteeMember = this.mode === 'async' && this.asyncCommitteeRank >= 0;
+    this.isAsyncCommitteeMember = this.syncMode === 'async' && this.asyncCommitteeRank >= 0;
     this.isAsyncCommitteeLeader = this.isAsyncCommitteeMember && this.asyncCommitteeRank === 0;
-    this.centralizedCoordinatorId = process.env.CENTRALIZED_COORDINATOR || 'A-N1';
-    this.isCentralizedCoordinator = this.mode === 'centralized' && this.clientId === this.centralizedCoordinatorId;
     this.asyncAggregationLoopActive = false;
     this.asyncAggregationLoopPromise = null;
     this.timingRoot = process.env.FL_TIMING_ROOT || path.join(this.projectRoot, 'nodejs-client', 'reports', 'timing', 'adhoc');
@@ -406,6 +113,8 @@ class FlClient {
       clientId: this.clientId,
       dataset: this.dataset,
       mode: this.mode,
+      topology: this.topology,
+      syncMode: this.syncMode,
       org: this.org,
       nodeId: this.nodeId,
       orgMspId: this.orgMspId,
@@ -451,7 +160,7 @@ class FlClient {
   }
 
   async setupFabricClient() {
-    this.fabricClient = new this.FabricClient();
+    this.fabricClient = new FabricClient(this.fabricClientOptions);
     try {
       await this.fabricClient.connect();
       await this.verifyFabricReady();
@@ -497,11 +206,37 @@ class FlClient {
     console.log(`[${this.clientId}] Model initialized (${this.dataset})`);
   }
 
+  getExecutionModeGroup() {
+    return this.syncMode;
+  }
+
+  getTopologyGroup() {
+    return this.topology;
+  }
+
+  getModelStorageDir() {
+    return path.join(
+      this.projectRoot,
+      'nodejs-client',
+      'models',
+      this.dataset,
+      this.getExecutionModeGroup(),
+      this.getTopologyGroup()
+    );
+  }
+
   sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   buildAsyncCommitteeMembers() {
+    if (this.syncMode !== 'async') {
+      return [];
+    }
+    if (this.topology === 'centralized') {
+      return [this.centralizedCoordinatorId];
+    }
+
     const members = [];
     for (let i = 1; i <= this.org1NodeCount; i++) {
       members.push(`A-N${i}`);
@@ -715,7 +450,7 @@ class FlClient {
       // Ignore disconnect errors during reconnect.
     }
 
-    this.fabricClient = new this.FabricClient();
+    this.fabricClient = new FabricClient(this.fabricClientOptions);
     await this.fabricClient.connect();
     console.log(`[${this.clientId}] Reconnected to Fabric (${this.peerName})`);
   }
@@ -892,7 +627,7 @@ class FlClient {
     let globalAggregationMs = null;
 
     try {
-      if (this.mode === 'sync' || this.mode === 'decentralized') {
+      if (this.syncMode === 'sync' && this.topology === 'decentralized') {
         await this.withRetry(
           `InitHierarchicalRound(${epoch})`,
           () => this.fabricClient.initHierarchicalRound(epoch, 2, this.org1NodeCount, this.org2NodeCount),
@@ -970,7 +705,7 @@ class FlClient {
           chaincodeEndedAtMs: syncAggregationTiming.endedAt,
         };
         console.log(`[${this.clientId}] Finalized sync epoch ${epoch}`);
-      } else if (this.mode === 'centralized') {
+      } else if (this.syncMode === 'sync' && this.topology === 'centralized') {
         if (this.isCentralizedCoordinator) {
           await this.withRetry(
             `InitCentralizedRound(${epoch})`,
@@ -1134,7 +869,7 @@ class FlClient {
       for (let attempt = 1; attempt <= 10; attempt++) {
         try {
           const globalModel = await this.fabricClient.getGlobalModel(epoch);
-          console.log(`[${this.clientId}] Retrieved ${this.mode.toUpperCase()} global model for epoch ${epoch}`);
+          console.log(`[${this.clientId}] Retrieved ${this.topology.toUpperCase()}-${this.syncMode.toUpperCase()} global model for epoch ${epoch}`);
           return globalModel;
         } catch (err) {
           lastError = err;
@@ -1168,7 +903,7 @@ class FlClient {
     };
 
     try {
-      if (this.mode === 'sync' || this.mode === 'decentralized' || this.mode === 'centralized') {
+      if (this.syncMode === 'sync') {
         await waitForSyncRoundFinalized();
         return await retryQuerySync();
       }
@@ -1233,8 +968,14 @@ class FlClient {
     this.modelInitValid = false;
     try {
       console.log(`[${this.clientId}] Checking for latest global model on chain...`);
-      if (this.mode === 'async') {
+      if (this.syncMode === 'async') {
         const latestVersion = await this.fabricClient.getLatestModelVersion();
+        if (!this.resume && latestVersion > 0) {
+          throw new Error(
+            `found existing async version ${latestVersion} on chain while --resume=false; ` +
+              `redeploy network for a fresh run or set --resume true`
+          );
+        }
         if (latestVersion === 0) {
           console.log(`[${this.clientId}] No previous async versions found, starting fresh`);
           return 0;
@@ -1256,6 +997,12 @@ class FlClient {
         return 0;
       }
       const currentRound = await this.fabricClient.getCurrentRound();
+      if (!this.resume && currentRound > 0) {
+        throw new Error(
+          `found existing completed round ${currentRound} on chain while --resume=false; ` +
+            `redeploy network for a fresh run or set --resume true`
+        );
+      }
       if (currentRound === 0) {
         console.log(`[${this.clientId}] No previous training rounds found, starting fresh`);
         return 0;
@@ -1275,6 +1022,9 @@ class FlClient {
       console.log(`[${this.clientId}] Global model not found for round ${currentRound}, using random initialization`);
       return 0;
     } catch (err) {
+      if (!this.resume && err && String(err.message || '').includes('--resume=false')) {
+        throw err;
+      }
       console.warn(`[${this.clientId}] Failed to load latest model: ${err.message}, continuing with random initialization`);
       return 0;
     }
@@ -1282,14 +1032,14 @@ class FlClient {
 
   saveGlobalModelToFile(globalModel, index) {
     try {
-      const modelsDir = path.join(this.projectRoot, 'nodejs-client', 'models', this.dataset, this.mode);
+      const modelsDir = this.getModelStorageDir();
       
       // Ensure models directory exists
       if (!fs.existsSync(modelsDir)) {
         fs.mkdirSync(modelsDir, { recursive: true });
       }
       
-      const isAsync = this.mode === 'async';
+      const isAsync = this.syncMode === 'async';
       const effectiveVersion = Number.isInteger(globalModel.version) && globalModel.version > 0
         ? globalModel.version
         : index;
@@ -1305,6 +1055,8 @@ class FlClient {
       // Save the complete global model object
       const modelToSave = {
         mode: this.mode,
+        executionMode: this.getExecutionModeGroup(),
+        topology: this.getTopologyGroup(),
         round: effectiveRound,
         version: effectiveVersion,
         timestamp: globalModel.timestamp,
@@ -1315,7 +1067,9 @@ class FlClient {
       };
       
       fs.writeFileSync(filepath, JSON.stringify(modelToSave, null, 2));
-      console.log(`[${this.clientId}] Global model saved to models/${this.dataset}/${this.mode}/${filename}`);
+      console.log(
+        `[${this.clientId}] Global model saved to models/${this.dataset}/${this.getExecutionModeGroup()}/${this.getTopologyGroup()}/${filename}`
+      );
       
       // Also save as "latest" for easy access
       const latestPath = path.join(modelsDir, 'global-model-latest.json');
@@ -1542,10 +1296,28 @@ async function main() {
     })
     .option('mode', {
       type: 'string',
-      default: 'sync',
       coerce: (value) => String(value).toLowerCase(),
       choices: ['sync', 'decentralized', 'centralized', 'async'],
-      describe: 'FL mode: sync/decentralized, centralized, or async',
+      describe: 'Legacy mode alias (deprecated): sync|decentralized|centralized|async',
+    })
+    .option('topology', {
+      type: 'string',
+      default: 'decentralized',
+      coerce: (value) => String(value).toLowerCase(),
+      choices: ['centralized', 'decentralized'],
+      describe: 'Topology dimension: centralized or decentralized',
+    })
+    .option('sync-mode', {
+      type: 'string',
+      default: 'sync',
+      coerce: (value) => String(value).toLowerCase(),
+      choices: ['sync', 'async'],
+      describe: 'Synchronization dimension: sync or async',
+    })
+    .option('resume', {
+      type: 'boolean',
+      default: false,
+      describe: 'Resume from latest on-chain model/round instead of requiring a fresh network state',
     })
     .option('org1-node-count', {
       type: 'number',
@@ -1580,6 +1352,9 @@ async function main() {
     ordererEndpoint: argv['orderer-endpoint'],
     projectRoot: argv['project-root'],
     mode: argv.mode,
+    topology: argv.topology,
+    syncMode: argv['sync-mode'],
+    resume: argv.resume,
     org1NodeCount: argv['org1-node-count'],
     org2NodeCount: argv['org2-node-count'],
     dataset: argv.dataset,
@@ -1603,20 +1378,22 @@ async function main() {
       startRound: lastCompletedRound + 1,
       endRound: lastCompletedRound + argv.epochs,
       dataset: argv.dataset,
-      mode: argv.mode,
+      mode: client.mode,
+      topology: client.topology,
+      syncMode: client.syncMode,
     };
     client.writeTimingSnapshot();
     
-    console.log(`\n[${client.clientId}] Starting ${argv.mode.toUpperCase()} training with ${argv.epochs} rounds`);
+    console.log(`\n[${client.clientId}] Starting ${client.topology.toUpperCase()}-${client.syncMode.toUpperCase()} training with ${argv.epochs} rounds`);
 
     // Choose training strategy based on mode
-    if (argv.mode === 'async') {
+    if (client.syncMode === 'async') {
       // ASYNC MODE: Non-blocking, bounded async training
       console.log(`[${client.clientId}] Using asynchronous training loop (no round barrier)`);
       await client.trainAsync(argv.epochs);
     } else {
       // SYNC/CENTRALIZED MODE: Round-based training with on-chain aggregation barrier.
-      const modeLabel = argv.mode === 'centralized' ? 'centralized' : 'synchronous';
+      const modeLabel = client.topology === 'centralized' ? 'centralized synchronous' : 'decentralized synchronous';
       console.log(`[${client.clientId}] Using ${modeLabel} training loop (with round barrier)`);
       // FL training: each epoch triggers one round of aggregation
       for (let epoch = 1; epoch <= argv.epochs; epoch++) {
@@ -1664,7 +1441,7 @@ async function main() {
       }
 
       // Contract-signal flow: sync and centralized modes directly enter status-driven query path.
-      if (argv.mode === 'sync' || argv.mode === 'decentralized' || argv.mode === 'centralized') {
+      if (client.syncMode === 'sync') {
         console.log(`[${client.clientId}] Waiting for on-chain ready signal...`);
       } else {
         // Async mode keeps a short settle delay to avoid immediate hot polling.
@@ -1710,7 +1487,13 @@ async function main() {
       if (failedRound !== null) {
         client.timing.training.failedRound = failedRound;
       }
-      console.log(`\n[${client.clientId}] All epochs completed (${argv.epochs} FL rounds)`);
+      if (failedRound === null && completedRounds === argv.epochs) {
+        console.log(`\n[${client.clientId}] All epochs completed (${argv.epochs} FL rounds)`);
+      } else {
+        console.log(
+          `\n[${client.clientId}] Training stopped early: completed=${completedRounds}/${argv.epochs}, failedRound=${failedRound}`
+        );
+      }
     }
   } catch (err) {
     fatalError = err;

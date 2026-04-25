@@ -20,18 +20,18 @@ function readFirstFile(dirPath) {
   return path.join(dirPath, files[0]);
 }
 
-function buildIdentity() {
+function buildIdentity(runtimeConfig) {
   const base = path.join(
-    config.projectRoot,
+    runtimeConfig.projectRoot,
     'organizations',
     'peerOrganizations',
-    config.orgDomain,
+    runtimeConfig.orgDomain,
     'users',
-    `Admin@${config.orgDomain}`,
+    `Admin@${runtimeConfig.orgDomain}`,
     'msp'
   );
 
-  const certPath = path.join(base, 'signcerts', `Admin@${config.orgDomain}-cert.pem`);
+  const certPath = path.join(base, 'signcerts', `Admin@${runtimeConfig.orgDomain}-cert.pem`);
   const keyDir = path.join(base, 'keystore');
   const keyPath = readFirstFile(keyDir);
 
@@ -46,25 +46,25 @@ function buildIdentity() {
       certificate: readUtf8(certPath),
       privateKey: readUtf8(keyPath),
     },
-    mspId: config.orgMspId,
+    mspId: runtimeConfig.orgMspId,
     type: 'X.509',
   };
 }
 
-function buildConnectionProfile() {
+function buildConnectionProfile(runtimeConfig) {
   const peerTlsPath = path.join(
-    config.projectRoot,
+    runtimeConfig.projectRoot,
     'organizations',
     'peerOrganizations',
-    config.orgDomain,
+    runtimeConfig.orgDomain,
     'peers',
-    config.peerName,
+    runtimeConfig.peerName,
     'tls',
     'ca.crt'
   );
 
   const ordererTlsPath = path.join(
-    config.projectRoot,
+    runtimeConfig.projectRoot,
     'organizations',
     'ordererOrganizations',
     'example.com',
@@ -78,40 +78,40 @@ function buildConnectionProfile() {
     name: 'my-network-client',
     version: '1.0.0',
     channels: {
-      [config.channelName]: {
+      [runtimeConfig.channelName]: {
         peers: {
-          [config.peerName]: {},
+          [runtimeConfig.peerName]: {},
         },
         orderers: ['orderer.example.com'],
       },
     },
     organizations: {
-      [config.orgMspId]: {
-        mspid: config.orgMspId,
-        peers: [config.peerName],
+      [runtimeConfig.orgMspId]: {
+        mspid: runtimeConfig.orgMspId,
+        peers: [runtimeConfig.peerName],
       },
     },
     peers: {
-      [config.peerName]: {
-        url: `grpcs://${config.peerEndpoint}`,
+      [runtimeConfig.peerName]: {
+        url: `grpcs://${runtimeConfig.peerEndpoint}`,
         tlsCACerts: {
           pem: readUtf8(peerTlsPath),
         },
         grpcOptions: {
-          'ssl-target-name-override': config.peerHostAlias,
-          hostnameOverride: config.peerHostAlias,
+          'ssl-target-name-override': runtimeConfig.peerHostAlias,
+          hostnameOverride: runtimeConfig.peerHostAlias,
         },
       },
     },
     orderers: {
       'orderer.example.com': {
-        url: `grpcs://${config.ordererEndpoint}`,
+        url: `grpcs://${runtimeConfig.ordererEndpoint}`,
         tlsCACerts: {
           pem: readUtf8(ordererTlsPath),
         },
         grpcOptions: {
-          'ssl-target-name-override': config.ordererHostAlias,
-          hostnameOverride: config.ordererHostAlias,
+          'ssl-target-name-override': runtimeConfig.ordererHostAlias,
+          hostnameOverride: runtimeConfig.ordererHostAlias,
         },
       },
     },
@@ -119,23 +119,35 @@ function buildConnectionProfile() {
 }
 
 class FabricClient {
-  constructor() {
+  constructor(options = {}) {
     this.gateway = new Gateway();
     this.network = null;
     this.contract = null;
+    this.config = {
+      ...config,
+      ...options,
+    };
+
+    if (!this.config.peerHostAlias) {
+      this.config.peerHostAlias = this.config.peerName;
+    }
+
+    if (!this.config.ordererHostAlias) {
+      this.config.ordererHostAlias = 'orderer.example.com';
+    }
   }
 
   async connect() {
-    const identity = buildIdentity();
-    const connectionProfile = buildConnectionProfile();
+    const identity = buildIdentity(this.config);
+    const connectionProfile = buildConnectionProfile(this.config);
 
     await this.gateway.connect(connectionProfile, {
       identity,
       discovery: { enabled: true, asLocalhost: true },
     });
 
-    this.network = await this.gateway.getNetwork(config.channelName);
-    this.contract = this.network.getContract(config.chaincodeName);
+    this.network = await this.gateway.getNetwork(this.config.channelName);
+    this.contract = this.network.getContract(this.config.chaincodeName);
   }
 
   async set(key, value) {
@@ -166,6 +178,31 @@ class FabricClient {
 
   async initCentralizedRound(round, expectedParticipants = 2) {
     return this.submit('AggregationContract:InitCentralizedRound', round, expectedParticipants);
+  }
+
+  async initHierarchicalRound(round, expectedOrgs, org1ExpectedNodes, org2ExpectedNodes) {
+    return this.submit(
+      'AggregationContract:InitHierarchicalRound',
+      round,
+      expectedOrgs,
+      org1ExpectedNodes,
+      org2ExpectedNodes
+    );
+  }
+
+  async submitLocalNodeUpdateSync(collection, round, nodeID, updateData, sampleCount) {
+    return this.submit(
+      'AggregationContract:SubmitLocalNodeUpdateSync',
+      collection,
+      round,
+      nodeID,
+      updateData,
+      sampleCount
+    );
+  }
+
+  async finalizeOrgSyncRound(round) {
+    return this.submit('AggregationContract:FinalizeOrgSyncRound', round);
   }
 
   async submitLocalUpdateSync(collection, round, updateData, sampleCount) {
@@ -257,12 +294,37 @@ class FabricClient {
     return JSON.parse(result.toString());
   }
 
+  async getOrgRoundStatus(round, orgID) {
+    const result = await this.evaluate('AggregationContract:GetOrgRoundStatus', round, orgID);
+    return JSON.parse(result.toString());
+  }
+
+  async getCurrentRound() {
+    const result = await this.evaluate('AggregationContract:GetCurrentRound');
+    return Number(result.toString());
+  }
+
   async get(key) {
     if (!this.contract) {
       throw new Error('Client is not connected');
     }
     const result = await this.contract.evaluateTransaction('Get', key);
     return result.toString();
+  }
+
+  async tryGet(key) {
+    if (!this.contract) {
+      throw new Error('Client is not connected');
+    }
+    try {
+      const result = await this.contract.evaluateTransaction('Get', key);
+      return result.toString();
+    } catch (err) {
+      if (err.message && err.message.includes('does not exist')) {
+        return null;
+      }
+      throw err;
+    }
   }
 
   async disconnect() {

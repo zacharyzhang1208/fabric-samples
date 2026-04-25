@@ -73,23 +73,31 @@ function listModelEntries(dataset) {
     return [];
   }
 
-  const dirs = [datasetDir, path.join(datasetDir, 'sync'), path.join(datasetDir, 'async')]
-    .filter((d) => fs.existsSync(d));
-
   const entries = [];
   const pattern = /^global-model-(round|version)-(\d+)\.json$/;
 
-  for (const dir of dirs) {
-    for (const f of fs.readdirSync(dir)) {
-      const m = f.match(pattern);
-      if (!m) continue;
+  const walk = (dir) => {
+    for (const name of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, name.name);
+      if (name.isDirectory()) {
+        walk(fullPath);
+        continue;
+      }
+
+      const m = name.name.match(pattern);
+      if (!m) {
+        continue;
+      }
+
       entries.push({
-        filePath: path.join(dir, f),
+        filePath: fullPath,
         kind: m[1],
         id: Number(m[2]),
       });
     }
-  }
+  };
+
+  walk(datasetDir);
 
   entries.sort((a, b) => a.id - b.id);
   return entries;
@@ -115,11 +123,20 @@ function resolveModelFiles(dataset, roundArg) {
   }
 
   if (roundArg === 'latest') {
-    const latestCandidates = [
-      path.join(modelsDir, 'global-model-latest.json'),
-      path.join(modelsDir, 'sync', 'global-model-latest.json'),
-      path.join(modelsDir, 'async', 'global-model-latest.json'),
-    ].filter((p) => fs.existsSync(p));
+    const latestCandidates = [];
+    const walkLatest = (dir) => {
+      for (const name of fs.readdirSync(dir, { withFileTypes: true })) {
+        const fullPath = path.join(dir, name.name);
+        if (name.isDirectory()) {
+          walkLatest(fullPath);
+          continue;
+        }
+        if (name.name === 'global-model-latest.json') {
+          latestCandidates.push(fullPath);
+        }
+      }
+    };
+    walkLatest(modelsDir);
 
     if (latestCandidates.length > 0) {
       return [latestCandidates[0]];

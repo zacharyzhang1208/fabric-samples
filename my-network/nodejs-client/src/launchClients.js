@@ -87,7 +87,7 @@ const CLIENTS = [
   },
 ];
 
-function launchClient(config, epochs, mode, dataset = 'linear', mnistSamples = 20000, logStream) {
+function launchClient(config, epochs, topology, syncMode, dataset = 'linear', mnistSamples = 20000, logStream) {
   const org1NodeCount = CLIENTS.filter((c) => c.orgMspId === 'Org1MSP').length;
   const org2NodeCount = CLIENTS.filter((c) => c.orgMspId === 'Org2MSP').length;
 
@@ -103,7 +103,8 @@ function launchClient(config, epochs, mode, dataset = 'linear', mnistSamples = 2
     '--org1-node-count', String(org1NodeCount),
     '--org2-node-count', String(org2NodeCount),
     '--epochs', String(epochs),
-    '--mode', mode,
+    '--topology', topology,
+    '--sync-mode', syncMode,
     '--dataset', dataset,
     '--mnist-samples', String(mnistSamples),
   ];
@@ -141,17 +142,30 @@ function launchClient(config, epochs, mode, dataset = 'linear', mnistSamples = 2
 
 async function main() {
   const epochs = process.argv[2] ? Number(process.argv[2]) : 10;
-  const modeArg = process.argv[3];
-  if (!modeArg) {
-    console.error('[LAUNCHER] Missing required mode argument.');
-    console.error('[LAUNCHER] Usage: node src/launchClients.js <epochs> <mode> [dataset] [mnistSamples]');
-    console.error('[LAUNCHER] Example: node src/launchClients.js 10 decentralized mnist 20000');
+  const topologyArg = process.argv[3];
+  const syncModeArg = process.argv[4];
+  if (!topologyArg || !syncModeArg) {
+    console.error('[LAUNCHER] Missing required topology/syncMode arguments.');
+    console.error('[LAUNCHER] Usage: node src/launchClients.js <epochs> <topology> <syncMode> [dataset] [mnistSamples]');
+    console.error('[LAUNCHER] Example: node src/launchClients.js 10 decentralized sync mnist 20000');
     process.exit(1);
   }
-  const mode = String(modeArg).toLowerCase();
-  const dataset = process.argv[4] || 'linear';
-  const mnistSamples = process.argv[5] ? Number(process.argv[5]) : 20000;
-  const runId = createRunId({ dataset, mode, epochs });
+  const topology = String(topologyArg).toLowerCase();
+  const syncMode = String(syncModeArg).toLowerCase();
+  const validTopologies = new Set(['centralized', 'decentralized']);
+  const validSyncModes = new Set(['sync', 'async']);
+  if (!validTopologies.has(topology)) {
+    console.error(`[LAUNCHER] Invalid topology: ${topology}. Use centralized or decentralized.`);
+    process.exit(1);
+  }
+  if (!validSyncModes.has(syncMode)) {
+    console.error(`[LAUNCHER] Invalid syncMode: ${syncMode}. Use sync or async.`);
+    process.exit(1);
+  }
+  const dataset = process.argv[5] || 'linear';
+  const mnistSamples = process.argv[6] ? Number(process.argv[6]) : 20000;
+  const modeTag = `${topology}-${syncMode}`;
+  const runId = createRunId({ dataset, mode: modeTag, epochs });
   const timingRoot = path.join(__dirname, '..', 'reports', 'timing', runId);
   const logsRoot = path.join(__dirname, '..', 'log');
   const runLogPath = path.join(logsRoot, `${runId}.txt`);
@@ -190,16 +204,16 @@ async function main() {
 
   console.log(`[LAUNCHER] Starting ${CLIENTS.length} FL clients`);
   console.log(`[LAUNCHER] Topology: Bank A (Org1) - 2 nodes, Bank B (Org2) - 3 nodes`);
-  console.log(`[LAUNCHER] Configuration: epochs=${epochs}, mode=${mode}, dataset=${dataset}`);
-  if (mode === 'centralized') {
+  console.log(`[LAUNCHER] Configuration: epochs=${epochs}, topology=${topology}, syncMode=${syncMode}, dataset=${dataset}`);
+  if (topology === 'centralized') {
     console.log(`[LAUNCHER] Centralized coordinator: ${process.env.CENTRALIZED_COORDINATOR || 'A-N1'}`);
   }
   console.log(`[LAUNCHER] Timing run ID: ${runId}`);
   if (dataset === 'mnist' || dataset === 'cifar') {
     console.log(`[LAUNCHER] ${dataset.toUpperCase()} samples: ${mnistSamples}`);
   }
-  console.log(`[LAUNCHER] Usage: node launchClients.js [epochs] [mode] [dataset] [mnistSamples]`);
-  console.log(`[LAUNCHER] Example: node launchClients.js 10 centralized linear\n`);
+  console.log(`[LAUNCHER] Usage: node launchClients.js [epochs] [topology] [syncMode] [dataset] [mnistSamples]`);
+  console.log(`[LAUNCHER] Example: node launchClients.js 10 centralized sync linear\n`);
   
   const { DataLoaderFactory } = require('./dataLoaders');
   const availableDatasets = DataLoaderFactory.getAvailable();
@@ -240,7 +254,9 @@ async function main() {
   writeJson(path.join(timingRoot, 'run-summary.json'), {
     runId,
     dataset,
-    mode,
+    mode: modeTag,
+    topology,
+    syncMode,
     epochs,
     mnistSamples,
     startedAt: new Date(runStartedAtMs).toISOString(),
@@ -251,7 +267,7 @@ async function main() {
 
   const childExitCodes = {};
   const processes = CLIENTS.map((config) => {
-    const child = launchClient(config, epochs, mode, dataset, mnistSamples, logStream);
+    const child = launchClient(config, epochs, topology, syncMode, dataset, mnistSamples, logStream);
     const clientId = `${config.org}-N${config.node}`;
     childExitCodes[clientId] = null;
     child.on('exit', (code) => {
@@ -271,46 +287,60 @@ async function main() {
   );
 
   console.log(`\n[LAUNCHER] All clients completed`);
+
+  const hasClientFailures = Object.values(childExitCodes).some((code) => code !== 0);
+  if (hasClientFailures) {
+    console.warn('[LAUNCHER] At least one client failed; skipping evaluation and report generation for this run.');
+  }
  
-  // Generate evaluation files first so report can include metrics trends.
-  console.log(`\n[LAUNCHER] Evaluating saved global models...`);
-  const evaluateStartedAtMs = Date.now();
-  const evaluateScript = path.join(__dirname, 'utils', 'evaluateModel.js');
-  const evaluateArgs = [evaluateScript, dataset, 'all'];
-  if (dataset === 'mnist') {
-    evaluateArgs.push(String(mnistSamples));
-  }
-  const evaluateProc = spawn('node', evaluateArgs, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    cwd: path.join(__dirname, '..'),
-  });
-  pipeChildOutput(evaluateProc, logStream);
-  const evaluateExitCode = await new Promise((resolve) => {
-    evaluateProc.on('exit', (code) => resolve(code ?? 1));
-  });
-  const evaluateEndedAtMs = Date.now();
+  let evaluateStartedAtMs = Date.now();
+  let evaluateEndedAtMs = evaluateStartedAtMs;
+  let evaluateExitCode = null;
+  let reportStartedAtMs = Date.now();
+  let reportEndedAtMs = reportStartedAtMs;
+  let reportExitCode = null;
 
-  if (evaluateExitCode !== 0) {
-    console.warn(`[LAUNCHER] Model evaluation exited with code ${evaluateExitCode}. Report may have partial metrics.`);
-  }
+  if (!hasClientFailures) {
+    // Generate evaluation files first so report can include metrics trends.
+    console.log(`\n[LAUNCHER] Evaluating saved global models...`);
+    evaluateStartedAtMs = Date.now();
+    const evaluateScript = path.join(__dirname, 'utils', 'evaluateModel.js');
+    const evaluateArgs = [evaluateScript, dataset, 'all'];
+    if (dataset === 'mnist') {
+      evaluateArgs.push(String(mnistSamples));
+    }
+    const evaluateProc = spawn('node', evaluateArgs, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: path.join(__dirname, '..'),
+    });
+    pipeChildOutput(evaluateProc, logStream);
+    evaluateExitCode = await new Promise((resolve) => {
+      evaluateProc.on('exit', (code) => resolve(code ?? 1));
+    });
+    evaluateEndedAtMs = Date.now();
 
-  // Generate training report
-  console.log(`\n[LAUNCHER] Generating training report...`);
-  const reportStartedAtMs = Date.now();
-  const reportScript = path.join(__dirname, 'utils', 'generateReport.js');
-  const reportProc = spawn('node', [reportScript, dataset], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    cwd: path.join(__dirname, '..'),
-  });
-  pipeChildOutput(reportProc, logStream);
+    if (evaluateExitCode !== 0) {
+      console.warn(`[LAUNCHER] Model evaluation exited with code ${evaluateExitCode}. Report may have partial metrics.`);
+    }
 
-  const reportExitCode = await new Promise((resolve) => {
-    reportProc.on('exit', (code) => resolve(code ?? 1));
-  });
-  const reportEndedAtMs = Date.now();
+    // Generate training report
+    console.log(`\n[LAUNCHER] Generating training report...`);
+    reportStartedAtMs = Date.now();
+    const reportScript = path.join(__dirname, 'utils', 'generateReport.js');
+    const reportProc = spawn('node', [reportScript, dataset], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: path.join(__dirname, '..'),
+    });
+    pipeChildOutput(reportProc, logStream);
 
-  if (reportExitCode !== 0) {
-    console.warn(`[LAUNCHER] Report generation exited with code ${reportExitCode}.`);
+    reportExitCode = await new Promise((resolve) => {
+      reportProc.on('exit', (code) => resolve(code ?? 1));
+    });
+    reportEndedAtMs = Date.now();
+
+    if (reportExitCode !== 0) {
+      console.warn(`[LAUNCHER] Report generation exited with code ${reportExitCode}.`);
+    }
   }
 
   const clientTimings = CLIENTS.map((config) => {
@@ -343,7 +373,9 @@ async function main() {
   writeJson(path.join(timingRoot, 'run-summary.json'), {
     runId,
     dataset,
-    mode,
+    mode: modeTag,
+    topology,
+    syncMode,
     epochs,
     mnistSamples,
     startedAt: new Date(runStartedAtMs).toISOString(),
@@ -355,7 +387,7 @@ async function main() {
     reportGenerationMs: reportEndedAtMs - reportStartedAtMs,
     evaluateExitCode,
     reportExitCode,
-    status: 'completed',
+    status: hasClientFailures ? 'failed' : 'completed',
     childExitCodes,
     roundTotalMs: summarizeDurations(roundDurations),
     submitUpdateMs: summarizeDurations(submitDurations),

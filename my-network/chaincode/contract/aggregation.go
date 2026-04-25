@@ -333,6 +333,7 @@ func (a *AggregationContract) InitSyncRound(ctx contractapi.TransactionContextIn
 		Round:           round,
 		ExpectedCount:   expectedParticipants,
 		SubmittedOrgs:   []string{},
+		SubmittedNodes:  []string{},
 		AggregationDone: false,
 		Timestamp:       txTimestamp.Seconds,
 	}
