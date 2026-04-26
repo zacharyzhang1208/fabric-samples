@@ -31,9 +31,11 @@ const TYPE = DATASET_TYPES[DATASET] || 'classification';
 
 const EVALS_DIR  = path.join(__dirname, '..', '..', 'reports', 'evaluations');
 const REPORTS_DIR = path.join(__dirname, '..', '..', 'reports');
-const OUTPUT_FILE = path.join(REPORTS_DIR, `fl-training-report-${DATASET}.html`);
+const LEGACY_OUTPUT_FILE = path.join(REPORTS_DIR, `fl-training-report-${DATASET}.html`);
 const MODELS_DIR = path.join(__dirname, '..', '..', 'models', DATASET);
 const RUN_ID = process.env.FL_TIMING_RUN_ID || null;
+const REPORTS_RUN_DIR = RUN_ID ? path.join(EVALS_DIR, RUN_ID) : REPORTS_DIR;
+const OUTPUT_FILE = path.join(REPORTS_RUN_DIR, `fl-training-report-${DATASET}.html`);
 
 // ── Data loading ──────────────────────────────────────────────────────────────
 
@@ -59,6 +61,14 @@ function loadGlobalModels() {
     for (const file of files) {
       const m = file.match(pattern);
       if (!m) continue;
+      if (RUN_ID) {
+        const relativePath = path.relative(MODELS_DIR, path.join(dir, file));
+        const pathParts = relativePath.split(path.sep);
+        // New layout: models/<dataset>/<sync|async>/<topology>/<runId>/global-model-*.json
+        if (pathParts.length < 4 || pathParts[2] !== RUN_ID) {
+          continue;
+        }
+      }
       const index = Number(m[2]);
       const content = fs.readFileSync(path.join(dir, file), 'utf8');
       const model = JSON.parse(content);
@@ -708,10 +718,20 @@ function main() {
   if (!fs.existsSync(REPORTS_DIR)) {
     fs.mkdirSync(REPORTS_DIR, { recursive: true });
   }
+  if (!fs.existsSync(REPORTS_RUN_DIR)) {
+    fs.mkdirSync(REPORTS_RUN_DIR, { recursive: true });
+  }
 
   const html = generateHTMLReport(models, evals);
   fs.writeFileSync(OUTPUT_FILE, html);
+  if (OUTPUT_FILE !== LEGACY_OUTPUT_FILE) {
+    fs.writeFileSync(LEGACY_OUTPUT_FILE, html);
+  }
+
   console.log(`✅ Report generated: ${OUTPUT_FILE}`);
+  if (OUTPUT_FILE !== LEGACY_OUTPUT_FILE) {
+    console.log(`📎 Top-level shortcut updated: ${LEGACY_OUTPUT_FILE}`);
+  }
   console.log(`\n📂 Open in browser: file://${OUTPUT_FILE}`);
 }
 

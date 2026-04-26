@@ -73,6 +73,12 @@ function listModelEntries(dataset) {
     return [];
   }
 
+  const requestedTopology = process.env.FL_EVAL_TOPOLOGY || null;
+  const requestedSyncMode = process.env.FL_EVAL_SYNC_MODE || null;
+  const requestedRunId = process.env.FL_TIMING_RUN_ID || null;
+  const validTopologies = new Set(['centralized', 'decentralized']);
+  const validSyncModes = new Set(['sync', 'async']);
+
   const entries = [];
   const pattern = /^global-model-(round|version)-(\d+)\.json$/;
 
@@ -86,6 +92,35 @@ function listModelEntries(dataset) {
 
       const m = name.name.match(pattern);
       if (!m) {
+        continue;
+      }
+
+      // Only accept files under the 2D mode layout:
+      // models/<dataset>/<sync|async>/<centralized|decentralized>/global-model-*.json
+      const relativePath = path.relative(datasetDir, fullPath);
+      const pathParts = relativePath.split(path.sep);
+      if (pathParts.length < 3) {
+        continue;
+      }
+
+      const syncMode = pathParts[0];
+      const topology = pathParts[1];
+      if (!validSyncModes.has(syncMode) || !validTopologies.has(topology)) {
+        continue;
+      }
+
+      if (requestedRunId) {
+        // New layout: models/<dataset>/<sync|async>/<topology>/<runId>/global-model-*.json
+        // Older layout files are ignored when runId is explicitly provided.
+        if (pathParts.length < 4 || pathParts[2] !== requestedRunId) {
+          continue;
+        }
+      }
+
+      if (requestedSyncMode && syncMode !== requestedSyncMode) {
+        continue;
+      }
+      if (requestedTopology && topology !== requestedTopology) {
         continue;
       }
 
@@ -484,8 +519,8 @@ async function evaluateCifarDataset(modelWeights, maxSamples) {
 }
 
 function saveEvaluationResult(dataset, modelPath, modelRecord, result) {
-  const topology = normalizeTopology(modelRecord.mode);
-  const mode = normalizeMode(modelRecord.mode);
+  const topology = modelRecord.topology || normalizeTopology(modelRecord.mode);
+  const mode = modelRecord.executionMode || normalizeMode(modelRecord.mode);
   const roundLabel = getRoundLabel(modelRecord);
   const runId = process.env.FL_TIMING_RUN_ID || createEvaluationRunId({
     dataset,

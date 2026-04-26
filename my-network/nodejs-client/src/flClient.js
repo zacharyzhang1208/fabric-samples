@@ -101,13 +101,21 @@ class FlClient {
     this.asyncCommitteeRank = this.asyncCommitteeMembers.indexOf(this.clientId);
     this.isAsyncCommitteeMember = this.syncMode === 'async' && this.asyncCommitteeRank >= 0;
     this.isAsyncCommitteeLeader = this.isAsyncCommitteeMember && this.asyncCommitteeRank === 0;
+    this.submitOrderIndex =
+      this.orgMspId === 'Org1MSP'
+        ? Math.max(0, this.nodeId - 1)
+        : Math.max(0, this.org1NodeCount + this.nodeId - 1);
     this.asyncAggregationLoopActive = false;
     this.asyncAggregationLoopPromise = null;
-    this.timingRoot = process.env.FL_TIMING_ROOT || path.join(this.projectRoot, 'nodejs-client', 'reports', 'timing', 'adhoc');
-    this.runId = process.env.FL_TIMING_RUN_ID || 'adhoc';
+    const adhocRunId = `adhoc-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    this.runId = process.env.FL_TIMING_RUN_ID || adhocRunId;
+    this.timingRoot = process.env.FL_TIMING_ROOT || path.join(this.projectRoot, 'nodejs-client', 'reports', 'timing', this.runId);
     this.timingFilePath = path.join(this.timingRoot, 'clients', `${this.clientId}.json`);
     this.lastSubmissionTiming = null;
     this.lastAggregationTiming = null;
+    this.coordinatorRoundInitNotified = new Set();
+    this.coordinatorRoundInitWaiters = new Map();
+    this.coordinatorIpcEnabled = typeof process.send === 'function';
     this.timing = {
       runId: this.runId,
       clientId: this.clientId,
@@ -126,6 +134,90 @@ class FlClient {
       training: {},
       rounds: [],
     };
+
+    this.setupCoordinatorSignals();
+  }
+
+  setupCoordinatorSignals() {
+    process.on('message', (message) => {
+      if (!message || message.type !== 'coordinator-round-initialized') {
+        return;
+      }
+
+      const round = Number(message.round);
+      if (!Number.isInteger(round) || round <= 0) {
+        return;
+      }
+
+      this.coordinatorRoundInitNotified.add(round);
+      const waiters = this.coordinatorRoundInitWaiters.get(round);
+      if (waiters && waiters.length > 0) {
+        waiters.forEach((resolve) => resolve(true));
+        this.coordinatorRoundInitWaiters.delete(round);
+      }
+    });
+  }
+
+  notifyCoordinatorRoundInitialized(round) {
+    if (!this.coordinatorIpcEnabled) {
+      return;
+    }
+
+    try {
+      process.send({
+        type: 'coordinator-round-initialized',
+        round,
+        coordinator: this.clientId,
+      });
+    } catch (err) {
+      console.warn(`[${this.clientId}] Failed to publish coordinator round init signal: ${this.getErrMessage(err)}`);
+    }
+  }
+
+  waitForCoordinatorRoundInitialized(round, timeoutMs = 15000) {
+    if (this.coordinatorRoundInitNotified.has(round)) {
+      return Promise.resolve(true);
+    }
+
+    if (!this.coordinatorIpcEnabled) {
+      return Promise.resolve(false);
+    }
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        const waiters = this.coordinatorRoundInitWaiters.get(round) || [];
+        const nextWaiters = waiters.filter((fn) => fn !== resolver);
+        if (nextWaiters.length > 0) {
+          this.coordinatorRoundInitWaiters.set(round, nextWaiters);
+        } else {
+          this.coordinatorRoundInitWaiters.delete(round);
+        }
+        resolve(false);
+      }, timeoutMs);
+
+      const resolver = (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      };
+
+      const waiters = this.coordinatorRoundInitWaiters.get(round) || [];
+      waiters.push(resolver);
+      this.coordinatorRoundInitWaiters.set(round, waiters);
+    });
+  }
+
+  async waitForCentralizedRoundInitialized(round) {
+    const notified = await this.waitForCoordinatorRoundInitialized(round, 15000);
+    if (notified) {
+      return;
+    }
+
+    await this.waitForContractSignal(
+      `CentralizedRoundInitialized(${round})`,
+      () => this.fabricClient.getRoundStatus(round),
+      (status) => status && Number.isInteger(status.expectedCount) && status.expectedCount > 0,
+      { attempts: 30, intervalMs: 500, reconnectOnConnectionError: false }
+    );
   }
 
   writeTimingSnapshot() {
@@ -221,7 +313,8 @@ class FlClient {
       'models',
       this.dataset,
       this.getExecutionModeGroup(),
-      this.getTopologyGroup()
+      this.getTopologyGroup(),
+      this.runId
     );
   }
 
@@ -712,6 +805,17 @@ class FlClient {
             () => this.fabricClient.initCentralizedRound(epoch, this.org1NodeCount + this.org2NodeCount),
             { attempts: 8, initialDelayMs: 150, reconnectOnConnectionError: true }
           );
+          this.notifyCoordinatorRoundInitialized(epoch);
+        } else {
+          await this.waitForCentralizedRoundInitialized(epoch);
+        }
+
+        if (!this.isCentralizedCoordinator) {
+          // Spread submissions to avoid overloading a single peer endpoint in short bursts.
+          const submitSkewMs = this.submitOrderIndex * 350;
+          if (submitSkewMs > 0) {
+            await this.sleep(submitSkewMs);
+          }
         }
 
         let phaseStart = Date.now();
@@ -1054,6 +1158,7 @@ class FlClient {
       
       // Save the complete global model object
       const modelToSave = {
+        runId: this.runId,
         mode: this.mode,
         executionMode: this.getExecutionModeGroup(),
         topology: this.getTopologyGroup(),
@@ -1068,7 +1173,7 @@ class FlClient {
       
       fs.writeFileSync(filepath, JSON.stringify(modelToSave, null, 2));
       console.log(
-        `[${this.clientId}] Global model saved to models/${this.dataset}/${this.getExecutionModeGroup()}/${this.getTopologyGroup()}/${filename}`
+        `[${this.clientId}] Global model saved to models/${this.dataset}/${this.getExecutionModeGroup()}/${this.getTopologyGroup()}/${this.runId}/${filename}`
       );
       
       // Also save as "latest" for easy access
@@ -1493,6 +1598,7 @@ async function main() {
         console.log(
           `\n[${client.clientId}] Training stopped early: completed=${completedRounds}/${argv.epochs}, failedRound=${failedRound}`
         );
+        process.exitCode = 1;
       }
     }
   } catch (err) {
@@ -1508,8 +1614,13 @@ async function main() {
     if (failedRound !== null) {
       client.timing.training.failedRound = failedRound;
     }
-    client.finalizeTiming(fatalError ? 'failed' : 'completed');
+    client.finalizeTiming(fatalError || failedRound !== null ? 'failed' : 'completed');
     await client.cleanup();
+
+    // When launched with an IPC channel, explicitly disconnect so Node can exit.
+    if (typeof process.disconnect === 'function' && process.connected) {
+      process.disconnect();
+    }
   }
 }
 

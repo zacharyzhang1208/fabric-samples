@@ -113,7 +113,7 @@ function launchClient(config, epochs, topology, syncMode, dataset = 'linear', mn
   console.log(`[LAUNCHER] Spawning ${clientId} on port ${config.port} (${config.peerName})...`);
 
   const child = spawn('node', args, {
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     cwd: path.join(__dirname, '..'),
     env: {
       ...process.env,
@@ -124,6 +124,7 @@ function launchClient(config, epochs, topology, syncMode, dataset = 'linear', mn
   });
 
   pipeChildOutput(child, logStream);
+  child.clientId = clientId;
 
   child.on('error', (err) => {
     console.error(`[LAUNCHER] Error spawning ${clientId}:`, err);
@@ -276,6 +277,40 @@ async function main() {
     return child;
   });
 
+  if (topology === 'centralized' && syncMode === 'sync') {
+    const coordinatorId = process.env.CENTRALIZED_COORDINATOR || 'A-N1';
+    for (const child of processes) {
+      child.on('message', (message) => {
+        if (!message || message.type !== 'coordinator-round-initialized') {
+          return;
+        }
+
+        if (message.coordinator !== coordinatorId) {
+          return;
+        }
+
+        const round = Number(message.round);
+        if (!Number.isInteger(round) || round <= 0) {
+          return;
+        }
+
+        for (const target of processes) {
+          if (target === child || !target.connected) {
+            continue;
+          }
+
+          target.send({
+            type: 'coordinator-round-initialized',
+            round,
+            coordinator: message.coordinator,
+          });
+        }
+
+        console.log(`[LAUNCHER] Broadcast round ${round} initialization from ${coordinatorId}`);
+      });
+    }
+  }
+
   // Wait for all processes to complete
   await Promise.all(
     processes.map(
@@ -312,6 +347,11 @@ async function main() {
     const evaluateProc = spawn('node', evaluateArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       cwd: path.join(__dirname, '..'),
+      env: {
+        ...process.env,
+        FL_EVAL_TOPOLOGY: topology,
+        FL_EVAL_SYNC_MODE: syncMode,
+      },
     });
     pipeChildOutput(evaluateProc, logStream);
     evaluateExitCode = await new Promise((resolve) => {
