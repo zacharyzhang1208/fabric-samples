@@ -281,7 +281,7 @@ async function main() {
     const coordinatorId = process.env.CENTRALIZED_COORDINATOR || 'A-N1';
     for (const child of processes) {
       child.on('message', (message) => {
-        if (!message || message.type !== 'coordinator-round-initialized') {
+        if (!message || !message.type) {
           return;
         }
 
@@ -289,24 +289,42 @@ async function main() {
           return;
         }
 
-        const round = Number(message.round);
-        if (!Number.isInteger(round) || round <= 0) {
+        if (message.type === 'coordinator-round-initialized') {
+          const round = Number(message.round);
+          if (!Number.isInteger(round) || round <= 0) {
+            return;
+          }
+
+          for (const target of processes) {
+            if (target === child || !target.connected) {
+              continue;
+            }
+
+            target.send({
+              type: 'coordinator-round-initialized',
+              round,
+              coordinator: message.coordinator,
+            });
+          }
+
+          console.log(`[LAUNCHER] Broadcast round ${round} initialization from ${coordinatorId}`);
           return;
         }
 
-        for (const target of processes) {
-          if (target === child || !target.connected) {
-            continue;
+        if (message.type === 'coordinator-round-aggregation-timing') {
+          const round = Number(message.round);
+          if (!Number.isInteger(round) || round <= 0) {
+            return;
           }
 
-          target.send({
-            type: 'coordinator-round-initialized',
-            round,
-            coordinator: message.coordinator,
-          });
-        }
+          for (const target of processes) {
+            if (target === child || !target.connected) {
+              continue;
+            }
 
-        console.log(`[LAUNCHER] Broadcast round ${round} initialization from ${coordinatorId}`);
+            target.send(message);
+          }
+        }
       });
     }
   }

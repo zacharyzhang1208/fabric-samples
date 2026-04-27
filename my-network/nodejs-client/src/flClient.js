@@ -115,6 +115,8 @@ class FlClient {
     this.lastAggregationTiming = null;
     this.coordinatorRoundInitNotified = new Set();
     this.coordinatorRoundInitWaiters = new Map();
+    this.coordinatorRoundAggregationTimings = new Map();
+    this.coordinatorRoundAggregationWaiters = new Map();
     this.coordinatorIpcEnabled = typeof process.send === 'function';
     this.timing = {
       runId: this.runId,
@@ -140,20 +142,44 @@ class FlClient {
 
   setupCoordinatorSignals() {
     process.on('message', (message) => {
-      if (!message || message.type !== 'coordinator-round-initialized') {
+      if (!message || !message.type) {
         return;
       }
 
-      const round = Number(message.round);
-      if (!Number.isInteger(round) || round <= 0) {
+      if (message.type === 'coordinator-round-initialized') {
+        const round = Number(message.round);
+        if (!Number.isInteger(round) || round <= 0) {
+          return;
+        }
+
+        this.coordinatorRoundInitNotified.add(round);
+        const waiters = this.coordinatorRoundInitWaiters.get(round);
+        if (waiters && waiters.length > 0) {
+          waiters.forEach((resolve) => resolve(true));
+          this.coordinatorRoundInitWaiters.delete(round);
+        }
         return;
       }
 
-      this.coordinatorRoundInitNotified.add(round);
-      const waiters = this.coordinatorRoundInitWaiters.get(round);
-      if (waiters && waiters.length > 0) {
-        waiters.forEach((resolve) => resolve(true));
-        this.coordinatorRoundInitWaiters.delete(round);
+      if (message.type === 'coordinator-round-aggregation-timing') {
+        const round = Number(message.round);
+        if (!Number.isInteger(round) || round <= 0) {
+          return;
+        }
+
+        const timing = {
+          globalAggregationMs: Number(message.globalAggregationMs),
+          chaincodeAggregationWindowMs: Number(message.chaincodeAggregationWindowMs),
+          chaincodeStartedAtMs: Number(message.chaincodeStartedAtMs),
+          chaincodeEndedAtMs: Number(message.chaincodeEndedAtMs),
+        };
+
+        this.coordinatorRoundAggregationTimings.set(round, timing);
+        const waiters = this.coordinatorRoundAggregationWaiters.get(round);
+        if (waiters && waiters.length > 0) {
+          waiters.forEach((resolve) => resolve(timing));
+          this.coordinatorRoundAggregationWaiters.delete(round);
+        }
       }
     });
   }
@@ -171,6 +197,26 @@ class FlClient {
       });
     } catch (err) {
       console.warn(`[${this.clientId}] Failed to publish coordinator round init signal: ${this.getErrMessage(err)}`);
+    }
+  }
+
+  notifyCoordinatorAggregationTiming(round, timing) {
+    if (!this.coordinatorIpcEnabled) {
+      return;
+    }
+
+    try {
+      process.send({
+        type: 'coordinator-round-aggregation-timing',
+        round,
+        coordinator: this.clientId,
+        globalAggregationMs: timing.globalAggregationMs,
+        chaincodeAggregationWindowMs: timing.chaincodeAggregationWindowMs,
+        chaincodeStartedAtMs: timing.chaincodeStartedAtMs,
+        chaincodeEndedAtMs: timing.chaincodeEndedAtMs,
+      });
+    } catch (err) {
+      console.warn(`[${this.clientId}] Failed to publish aggregation timing: ${this.getErrMessage(err)}`);
     }
   }
 
@@ -203,6 +249,38 @@ class FlClient {
       const waiters = this.coordinatorRoundInitWaiters.get(round) || [];
       waiters.push(resolver);
       this.coordinatorRoundInitWaiters.set(round, waiters);
+    });
+  }
+
+  waitForCoordinatorAggregationTiming(round, timeoutMs = 5000) {
+    if (this.coordinatorRoundAggregationTimings.has(round)) {
+      return Promise.resolve(this.coordinatorRoundAggregationTimings.get(round));
+    }
+
+    if (!this.coordinatorIpcEnabled) {
+      return Promise.resolve(null);
+    }
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        const waiters = this.coordinatorRoundAggregationWaiters.get(round) || [];
+        const nextWaiters = waiters.filter((fn) => fn !== resolver);
+        if (nextWaiters.length > 0) {
+          this.coordinatorRoundAggregationWaiters.set(round, nextWaiters);
+        } else {
+          this.coordinatorRoundAggregationWaiters.delete(round);
+        }
+        resolve(null);
+      }, timeoutMs);
+
+      const resolver = (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      };
+
+      const waiters = this.coordinatorRoundAggregationWaiters.get(round) || [];
+      waiters.push(resolver);
+      this.coordinatorRoundAggregationWaiters.set(round, waiters);
     });
   }
 
@@ -793,6 +871,7 @@ class FlClient {
           nodeSubmitMs,
           orgFinalizeMs,
           globalAggregationMs,
+          chaincodeAggregationMs: globalAggregationMs,
           stageTotalMs: globalAggregationMs,
           chaincodeStartedAtMs: syncAggregationTiming.startedAt,
           chaincodeEndedAtMs: syncAggregationTiming.endedAt,
@@ -837,12 +916,12 @@ class FlClient {
         if (this.isCentralizedCoordinator) {
           await this.waitForContractSignal(
             `CentralizedRoundReady(${epoch})`,
-            () => this.fabricClient.getRoundStatus(epoch),
-            (status) =>
-              status &&
-              Array.isArray(status.submittedNodes) &&
-              Number.isInteger(status.expectedCount) &&
-              status.submittedNodes.length >= status.expectedCount,
+            () => this.fabricClient.getCentralizedRoundProgress(epoch),
+            (progress) =>
+              progress &&
+              Number.isInteger(progress.submittedCount) &&
+              Number.isInteger(progress.expectedCount) &&
+              progress.submittedCount >= progress.expectedCount,
             { attempts: 60, intervalMs: 1000 }
           );
 
@@ -852,20 +931,24 @@ class FlClient {
             () => this.fabricClient.finalizeCentralizedRound(epoch),
             { attempts: 30, initialDelayMs: 250, reconnectOnConnectionError: true }
           );
+          const finalizeTxMs = Date.now() - phaseStart;
           const centralizedAggregationTiming = await this.withRetry(
             `GetCentralizedAggregationTiming(${epoch})`,
             () => this.fabricClient.getCentralizedAggregationTiming(epoch),
             { attempts: 8, initialDelayMs: 100, reconnectOnConnectionError: true, treatIdempotentAsSuccess: false }
           );
-          globalAggregationMs = centralizedAggregationTiming.durationMs;
+          globalAggregationMs = finalizeTxMs;
           this.lastSubmissionTiming = {
             nodeSubmitMs,
             orgFinalizeMs,
             globalAggregationMs,
+            chaincodeAggregationMs: globalAggregationMs,
             stageTotalMs: globalAggregationMs,
+            chaincodeAggregationWindowMs: centralizedAggregationTiming.durationMs,
             chaincodeStartedAtMs: centralizedAggregationTiming.startedAt,
             chaincodeEndedAtMs: centralizedAggregationTiming.endedAt,
           };
+          this.notifyCoordinatorAggregationTiming(epoch, this.lastSubmissionTiming);
           console.log(`[${this.clientId}] Finalized centralized epoch ${epoch}`);
         } else {
           await this.waitForContractSignal(
@@ -880,14 +963,29 @@ class FlClient {
             () => this.fabricClient.getCentralizedAggregationTiming(epoch),
             { attempts: 8, initialDelayMs: 100, reconnectOnConnectionError: true, treatIdempotentAsSuccess: false }
           );
-          globalAggregationMs = centralizedAggregationTiming.durationMs;
+          const coordinatorTiming = await this.waitForCoordinatorAggregationTiming(epoch, 5000);
+          globalAggregationMs =
+            coordinatorTiming && Number.isFinite(coordinatorTiming.globalAggregationMs)
+              ? coordinatorTiming.globalAggregationMs
+              : centralizedAggregationTiming.durationMs;
           this.lastSubmissionTiming = {
             nodeSubmitMs,
             orgFinalizeMs,
             globalAggregationMs,
+            chaincodeAggregationMs: globalAggregationMs,
             stageTotalMs: globalAggregationMs,
-            chaincodeStartedAtMs: centralizedAggregationTiming.startedAt,
-            chaincodeEndedAtMs: centralizedAggregationTiming.endedAt,
+            chaincodeAggregationWindowMs:
+              coordinatorTiming && Number.isFinite(coordinatorTiming.chaincodeAggregationWindowMs)
+                ? coordinatorTiming.chaincodeAggregationWindowMs
+                : centralizedAggregationTiming.durationMs,
+            chaincodeStartedAtMs:
+              coordinatorTiming && Number.isFinite(coordinatorTiming.chaincodeStartedAtMs)
+                ? coordinatorTiming.chaincodeStartedAtMs
+                : centralizedAggregationTiming.startedAt,
+            chaincodeEndedAtMs:
+              coordinatorTiming && Number.isFinite(coordinatorTiming.chaincodeEndedAtMs)
+                ? coordinatorTiming.chaincodeEndedAtMs
+                : centralizedAggregationTiming.endedAt,
           };
           console.log(`[${this.clientId}] Observed centralized epoch ${epoch} completion`);
         }
@@ -913,6 +1011,7 @@ class FlClient {
           nodeSubmitMs,
           orgFinalizeMs,
           globalAggregationMs,
+          chaincodeAggregationMs: globalAggregationMs,
           stageTotalMs: Date.now() - branchStartedAtMs,
         };
       }
@@ -1254,7 +1353,8 @@ class FlClient {
         stepTiming.submitUpdateMs = Date.now() - phaseStart;
         if (this.lastSubmissionTiming) {
           stepTiming.globalAggregationMs = this.lastSubmissionTiming.globalAggregationMs;
-          stepTiming.chaincodeAggregationMs = this.lastSubmissionTiming.globalAggregationMs;
+          stepTiming.chaincodeAggregationMs = this.lastSubmissionTiming.chaincodeAggregationMs;
+          stepTiming.chaincodeAggregationWindowMs = this.lastSubmissionTiming.chaincodeAggregationWindowMs;
           stepTiming.nodeSubmitMs = this.lastSubmissionTiming.nodeSubmitMs;
           stepTiming.orgFinalizeMs = this.lastSubmissionTiming.orgFinalizeMs;
           stepTiming.stageTotalMs = this.lastSubmissionTiming.stageTotalMs;
@@ -1528,7 +1628,8 @@ async function main() {
       roundTiming.submitUpdateMs = Date.now() - phaseStart;
         if (client.lastSubmissionTiming) {
           roundTiming.globalAggregationMs = client.lastSubmissionTiming.globalAggregationMs;
-          roundTiming.chaincodeAggregationMs = client.lastSubmissionTiming.globalAggregationMs;
+          roundTiming.chaincodeAggregationMs = client.lastSubmissionTiming.chaincodeAggregationMs;
+          roundTiming.chaincodeAggregationWindowMs = client.lastSubmissionTiming.chaincodeAggregationWindowMs;
           roundTiming.nodeSubmitMs = client.lastSubmissionTiming.nodeSubmitMs;
           roundTiming.orgFinalizeMs = client.lastSubmissionTiming.orgFinalizeMs;
           roundTiming.stageTotalMs = client.lastSubmissionTiming.stageTotalMs;

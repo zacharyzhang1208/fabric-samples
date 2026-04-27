@@ -169,6 +169,18 @@ class FabricClient {
     if (!this.contract) {
       throw new Error('Client is not connected');
     }
+
+    const channel = this.network && this.network.getChannel ? this.network.getChannel() : null;
+    const configuredPeer =
+      channel && this.config.peerName ? channel.getEndorser(this.config.peerName) : null;
+
+    if (configuredPeer) {
+      return this.contract
+        .createTransaction(functionName)
+        .setEndorsingPeers([configuredPeer])
+        .evaluate(...args.map(String));
+    }
+
     return this.contract.evaluateTransaction(functionName, ...args.map(String));
   }
 
@@ -286,6 +298,11 @@ class FabricClient {
 
   async getCentralizedAggregationTiming(round) {
     const result = await this.evaluate('AggregationContract:GetCentralizedAggregationTiming', round);
+    return JSON.parse(result.toString());
+  }
+
+  async getCentralizedRoundProgress(round) {
+    const result = await this.evaluate('AggregationContract:GetCentralizedRoundProgress', round);
     return JSON.parse(result.toString());
   }
 

@@ -90,6 +90,30 @@ type AggregationTiming struct {
 	EndedAt    int64  `json:"endedAt"`
 }
 
+type CentralizedRoundConfig struct {
+	Round         int    `json:"round"`
+	ExpectedCount int    `json:"expectedCount"`
+	Coordinator   string `json:"coordinator,omitempty"`
+	Timestamp     int64  `json:"timestamp"`
+}
+
+type CentralizedSubmissionRecord struct {
+	ParticipantKey string `json:"participantKey"`
+	OrgID          string `json:"orgId"`
+	NodeID         string `json:"nodeId"`
+	SampleCount    int    `json:"sampleCount"`
+	UpdateKey      string `json:"updateKey"`
+	TimestampMs    int64  `json:"timestampMs"`
+}
+
+type CentralizedRoundProgress struct {
+	Round           int  `json:"round"`
+	ExpectedCount   int  `json:"expectedCount"`
+	SubmittedCount  int  `json:"submittedCount"`
+	Ready           bool `json:"ready"`
+	AggregationDone bool `json:"aggregationDone"`
+}
+
 func syncAggregationTimingKey(round int) string {
 	return fmt.Sprintf("aggregation_timing_round_%d", round)
 }
@@ -106,8 +130,16 @@ func centralizedAggregationTimingKey(round int) string {
 	return fmt.Sprintf("centralized_aggregation_timing_round_%d", round)
 }
 
-func centralizedLastSubmitTsKey(round int) string {
-	return fmt.Sprintf("centralized_last_submit_ts_round_%d", round)
+func centralizedRoundConfigKey(round int) string {
+	return fmt.Sprintf("centralized_round_config_%d", round)
+}
+
+func centralizedSubmissionPrefix(round int) string {
+	return fmt.Sprintf("centralized_submit_round_%d_", round)
+}
+
+func centralizedSubmissionKey(round int, orgID string, nodeID string) string {
+	return fmt.Sprintf("%s%s_%s", centralizedSubmissionPrefix(round), orgID, nodeID)
 }
 
 func storeNodeUpdate(
@@ -152,97 +184,52 @@ func storeNodeUpdate(
 	return &update, lastSubmitMs, nil
 }
 
-// ============================================================================
-// LEGACY METHODS (for backward compatibility)
-// ============================================================================
-
-// SubmitLocalUpdate allows an organization to submit their local model update to PDC
-// DEPRECATED: Use SubmitLocalUpdateSync or SubmitLocalUpdateAsync
-// The update is stored in the organization's private shard (vpsaOrg1Shards or vpsaOrg2Shards)
-func (a *AggregationContract) SubmitLocalUpdate(ctx contractapi.TransactionContextInterface,
-	collection string, round int, updateData string, sampleCount int) error {
-
-	// Get caller's organization ID
-	clientMSPID, err := ctx.GetClientIdentity().GetMSPID()
+func (a *AggregationContract) getCentralizedRoundConfig(
+	ctx contractapi.TransactionContextInterface,
+	round int,
+) (*CentralizedRoundConfig, error) {
+	configJSON, err := ctx.GetStub().GetState(centralizedRoundConfigKey(round))
 	if err != nil {
-		return fmt.Errorf("failed to get client MSP ID: %v", err)
+		return nil, fmt.Errorf("failed to read centralized round config: %v", err)
+	}
+	if configJSON == nil {
+		return nil, fmt.Errorf("round %d not initialized", round)
 	}
 
-	// Validate collection matches caller's organization
-	validCollections := map[string]string{
-		"Org1MSP": CollectionVPSAOrg1Shards,
-		"Org2MSP": CollectionVPSAOrg2Shards,
+	var config CentralizedRoundConfig
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal centralized round config: %v", err)
 	}
 
-	expectedCollection, ok := validCollections[clientMSPID]
-	if !ok || collection != expectedCollection {
-		return fmt.Errorf("invalid collection for organization %s", clientMSPID)
-	}
-
-	// Create model update
-	txTimestamp, err := ctx.GetStub().GetTxTimestamp()
-	if err != nil {
-		return fmt.Errorf("failed to get timestamp: %v", err)
-	}
-
-	update := ModelUpdate{
-		OrgID:       clientMSPID,
-		Round:       round,
-		UpdateData:  updateData,
-		SampleCount: sampleCount,
-		Timestamp:   txTimestamp.Seconds,
-	}
-
-	updateJSON, err := json.Marshal(update)
-	if err != nil {
-		return fmt.Errorf("failed to marshal update: %v", err)
-	}
-
-	// Store in private data collection
-	key := fmt.Sprintf("update_round_%d_%s", round, clientMSPID)
-	err = ctx.GetStub().PutPrivateData(collection, key, updateJSON)
-	if err != nil {
-		return fmt.Errorf("failed to store update in PDC: %v", err)
-	}
-
-	// Store an aggregation-safe public record for runnable FedAvg demo.
-	publicKey := fmt.Sprintf("update_public_round_%d_%s", round, clientMSPID)
-	err = ctx.GetStub().PutState(publicKey, updateJSON)
-	if err != nil {
-		return fmt.Errorf("failed to store public update record: %v", err)
-	}
-
-	return nil
+	return &config, nil
 }
 
-// GetLocalUpdate retrieves a local update from PDC (only accessible by the owning organization)
-func (a *AggregationContract) GetLocalUpdate(ctx contractapi.TransactionContextInterface,
-	collection string, round int, orgID string) (*ModelUpdate, error) {
-
-	key := fmt.Sprintf("update_round_%d_%s", round, orgID)
-	updateJSON, err := ctx.GetStub().GetPrivateData(collection, key)
+func (a *AggregationContract) listCentralizedSubmissions(
+	ctx contractapi.TransactionContextInterface,
+	round int,
+) ([]CentralizedSubmissionRecord, error) {
+	prefix := centralizedSubmissionPrefix(round)
+	iterator, err := ctx.GetStub().GetStateByRange(prefix, prefix+"~")
 	if err != nil {
-		return nil, fmt.Errorf("failed to read from PDC: %v", err)
+		return nil, fmt.Errorf("failed to scan centralized submissions: %v", err)
 	}
-	if updateJSON == nil {
-		return nil, fmt.Errorf("update not found for round %d, org %s", round, orgID)
+	defer iterator.Close()
+
+	records := make([]CentralizedSubmissionRecord, 0)
+	for iterator.HasNext() {
+		entry, err := iterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read centralized submission entry: %v", err)
+		}
+
+		var record CentralizedSubmissionRecord
+		if err := json.Unmarshal(entry.Value, &record); err != nil {
+			return nil, fmt.Errorf("failed to parse centralized submission record: %v", err)
+		}
+		records = append(records, record)
 	}
 
-	var update ModelUpdate
-	err = json.Unmarshal(updateJSON, &update)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal update: %v", err)
-	}
-
-	return &update, nil
-}
-
-// AggregateUpdates performs secure aggregation of local updates and publishes global model
-// This should be called after all participants submit their updates
-// Implementation depends on your aggregation strategy (FedAvg, VPSA, etc.)
-func (a *AggregationContract) AggregateUpdates(ctx contractapi.TransactionContextInterface,
-	round int, participants []string) error {
-	return a.aggregateSync(ctx, round, participants)
+	return records, nil
 }
 
 // GetGlobalModel retrieves the global model for a specific round
@@ -382,7 +369,21 @@ func (a *AggregationContract) InitCentralizedRound(ctx contractapi.TransactionCo
 	}
 
 	key := fmt.Sprintf("round_status_%d", round)
-	return ctx.GetStub().PutState(key, statusJSON)
+	if err := ctx.GetStub().PutState(key, statusJSON); err != nil {
+		return err
+	}
+
+	config := CentralizedRoundConfig{
+		Round:         round,
+		ExpectedCount: expectedParticipants,
+		Timestamp:     txTimestamp.Seconds,
+	}
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal centralized round config: %v", err)
+	}
+
+	return ctx.GetStub().PutState(centralizedRoundConfigKey(round), configJSON)
 }
 
 // InitHierarchicalRound initializes a round for two-layer sync FL.
@@ -430,45 +431,32 @@ func (a *AggregationContract) SubmitLocalUpdateCentralized(ctx contractapi.Trans
 		return fmt.Errorf("invalid collection for organization %s", clientMSPID)
 	}
 
-	status, err := a.GetRoundStatus(ctx, round)
-	if err != nil {
-		return fmt.Errorf("round %d not initialized: %v", round, err)
-	}
-
-	if status.AggregationDone {
-		return fmt.Errorf("round %d already completed", round)
+	if _, err := a.getCentralizedRoundConfig(ctx, round); err != nil {
+		return err
 	}
 
 	participantKey := fmt.Sprintf("%s:%s", clientMSPID, nodeID)
-	if containsString(status.SubmittedNodes, participantKey) {
-		return nil
-	}
+	submissionKey := centralizedSubmissionKey(round, clientMSPID, nodeID)
 
 	_, lastSubmitMs, err := storeNodeUpdate(ctx, collection, round, clientMSPID, nodeID, updateData, sampleCount)
 	if err != nil {
 		return err
 	}
 
-	status.SubmittedNodes = append(status.SubmittedNodes, participantKey)
-	if !containsString(status.SubmittedOrgs, clientMSPID) {
-		status.SubmittedOrgs = append(status.SubmittedOrgs, clientMSPID)
+	record := CentralizedSubmissionRecord{
+		ParticipantKey: participantKey,
+		OrgID:          clientMSPID,
+		NodeID:         nodeID,
+		SampleCount:    sampleCount,
+		UpdateKey:      fmt.Sprintf("node_update_public_round_%d_%s_%s", round, clientMSPID, nodeID),
+		TimestampMs:    lastSubmitMs,
 	}
-
-	statusJSON, err := json.Marshal(status)
+	recordJSON, err := json.Marshal(record)
 	if err != nil {
-		return fmt.Errorf("failed to marshal status: %v", err)
+		return fmt.Errorf("failed to marshal centralized submission record: %v", err)
 	}
 
-	statusKey := fmt.Sprintf("round_status_%d", round)
-	if err := ctx.GetStub().PutState(statusKey, statusJSON); err != nil {
-		return err
-	}
-
-	if err := ctx.GetStub().PutState(centralizedLastSubmitTsKey(round), []byte(fmt.Sprintf("%d", lastSubmitMs))); err != nil {
-		return fmt.Errorf("failed to store centralized last submit timestamp: %v", err)
-	}
-
-	return nil
+	return ctx.GetStub().PutState(submissionKey, recordJSON)
 }
 
 func (a *AggregationContract) initOrgRoundStatus(
@@ -967,19 +955,57 @@ func (a *AggregationContract) FinalizeCentralizedRound(ctx contractapi.Transacti
 		return nil
 	}
 
-	if len(status.SubmittedNodes) < status.ExpectedCount {
+	config, err := a.getCentralizedRoundConfig(ctx, round)
+	if err != nil {
+		return err
+	}
+
+	records, err := a.listCentralizedSubmissions(ctx, round)
+	if err != nil {
+		return err
+	}
+
+	participants := make([]string, 0, len(records))
+	participantSet := make(map[string]struct{}, len(records))
+	orgSet := make(map[string]struct{}, len(records))
+	latestSubmitMs := int64(0)
+
+	for _, record := range records {
+		if strings.TrimSpace(record.ParticipantKey) == "" {
+			continue
+		}
+		if _, exists := participantSet[record.ParticipantKey]; exists {
+			continue
+		}
+		participantSet[record.ParticipantKey] = struct{}{}
+		participants = append(participants, record.ParticipantKey)
+		if strings.TrimSpace(record.OrgID) != "" {
+			orgSet[record.OrgID] = struct{}{}
+		}
+		if record.TimestampMs > latestSubmitMs {
+			latestSubmitMs = record.TimestampMs
+		}
+	}
+
+	if len(participants) < config.ExpectedCount {
 		return fmt.Errorf(
 			"round %d not ready: %d/%d submitted",
 			round,
-			len(status.SubmittedNodes),
-			status.ExpectedCount,
+			len(participants),
+			config.ExpectedCount,
 		)
 	}
 
-	if err := a.aggregateCentralized(ctx, round, status.SubmittedNodes); err != nil {
+	if err := a.aggregateCentralized(ctx, round, participants); err != nil {
 		return fmt.Errorf("failed to aggregate round %d: %v", round, err)
 	}
 
+	status.SubmittedNodes = participants
+	status.SubmittedOrgs = make([]string, 0, len(orgSet))
+	for orgID := range orgSet {
+		status.SubmittedOrgs = append(status.SubmittedOrgs, orgID)
+	}
+	sort.Strings(status.SubmittedOrgs)
 	status.AggregationDone = true
 	statusJSON, err := json.Marshal(status)
 	if err != nil {
@@ -1008,11 +1034,8 @@ func (a *AggregationContract) FinalizeCentralizedRound(ctx contractapi.Transacti
 	}
 	endedAtMs := txTimestamp.Seconds*1000 + int64(txTimestamp.Nanos)/1_000_000
 	startedAtMs := endedAtMs
-	if lastSubmitRaw, err := ctx.GetStub().GetState(centralizedLastSubmitTsKey(round)); err == nil && lastSubmitRaw != nil {
-		var parsed int64
-		if _, scanErr := fmt.Sscanf(string(lastSubmitRaw), "%d", &parsed); scanErr == nil {
-			startedAtMs = parsed
-		}
+	if latestSubmitMs > 0 {
+		startedAtMs = latestSubmitMs
 	}
 	durationMs := int64(0)
 	if endedAtMs >= startedAtMs {
@@ -1265,6 +1288,43 @@ func (a *AggregationContract) GetCentralizedAggregationTiming(ctx contractapi.Tr
 	}
 
 	return &timing, nil
+}
+
+// GetCentralizedRoundProgress returns centralized sync submission progress for one round.
+func (a *AggregationContract) GetCentralizedRoundProgress(ctx contractapi.TransactionContextInterface, round int) (*CentralizedRoundProgress, error) {
+	config, err := a.getCentralizedRoundConfig(ctx, round)
+	if err != nil {
+		return nil, err
+	}
+
+	records, err := a.listCentralizedSubmissions(ctx, round)
+	if err != nil {
+		return nil, err
+	}
+
+	participantSet := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		if strings.TrimSpace(record.ParticipantKey) == "" {
+			continue
+		}
+		participantSet[record.ParticipantKey] = struct{}{}
+	}
+
+	aggregationDone := false
+	if status, err := a.GetRoundStatus(ctx, round); err == nil && status != nil {
+		aggregationDone = status.AggregationDone
+	}
+
+	submittedCount := len(participantSet)
+	progress := CentralizedRoundProgress{
+		Round:           round,
+		ExpectedCount:   config.ExpectedCount,
+		SubmittedCount:  submittedCount,
+		Ready:           submittedCount >= config.ExpectedCount,
+		AggregationDone: aggregationDone,
+	}
+
+	return &progress, nil
 }
 
 // ============================================================================
